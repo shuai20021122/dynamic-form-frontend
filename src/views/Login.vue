@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { fetchCaptcha, login } from "../api/auth.js";
+import { fetchCaptcha, getDefaultLandingPath, login } from "../api/auth.js";
 
 const router = useRouter();
 const route = useRoute();
@@ -33,12 +33,13 @@ async function handleSubmit() {
   submitting.value = true;
   errorMessage.value = "";
   try {
-    await login({
+    const result = await login({
       username: username.value.trim(),
       password: password.value,
       captcha_answer: captchaAnswer.value.trim(),
     });
-    const redirect = typeof route.query.redirect === "string" ? route.query.redirect : "/dashboard";
+    const role = result?.data?.user?.role || "";
+    const redirect = typeof route.query.redirect === "string" ? route.query.redirect : getDefaultLandingPath(role);
     await router.push(redirect);
   } catch (error) {
     errorMessage.value = error.message || "登录失败";
@@ -49,9 +50,7 @@ async function handleSubmit() {
   }
 }
 
-onMounted(() => {
-  loadCaptcha();
-});
+onMounted(loadCaptcha);
 </script>
 
 <template>
@@ -60,7 +59,7 @@ onMounted(() => {
       <div class="login-header">
         <p class="eyebrow">Dynamic Form Frontend</p>
         <h1>登录</h1>
-        <p class="login-copy">这是第二阶段的独立 Vue 前端最小闭环，当前只接入认证与 Dashboard 壳页。</p>
+        <p class="login-copy">Vue 前端通过 `/api/auth/*` 与 Flask 后端联调，继续沿用 Session Cookie。</p>
       </div>
 
       <form class="login-form" @submit.prevent="handleSubmit">
@@ -84,7 +83,7 @@ onMounted(() => {
               {{ loadingCaptcha ? "刷新中..." : "刷新" }}
             </button>
           </div>
-          <input v-model="captchaAnswer" type="text" inputmode="numeric" required />
+          <input v-model="captchaAnswer" type="text" required />
         </div>
 
         <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
