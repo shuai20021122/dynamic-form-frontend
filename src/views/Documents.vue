@@ -35,26 +35,15 @@ onMounted(loadPage);
 </script>
 
 <template>
-  <AppLayout
-    title="文档中心"
-    subtitle="当前后端没有“全局文档列表”接口，这里先按 entryId 查询对应记录的文档。"
-    :current-user="currentUser"
-    @logout="handleLogout"
-  >
+  <AppLayout title="文档中心" :current-user="currentUser" @logout="handleLogout">
     <section class="panel">
       <div class="panel-header">
-        <div>
-          <h2>按报名记录查看文档</h2>
-          <p class="muted-text">请通过 `?entryId=123` 打开，或从填写页进入。</p>
-        </div>
+        <h2>文档中心</h2>
       </div>
-
-      <EmptyState
-        v-if="!entryId"
-        title="当前没有 entryId"
-        description="示例：/documents?entryId=1。填写页里的“文档”入口会自动带上 entryId。"
-      />
-      <DocumentManager v-else :entry-id="entryId" :can-upload="true" :can-delete="true" />
+      <div class="panel-body">
+        <EmptyState v-if="!entryId" title="暂无数据" />
+        <DocumentManager v-else :entry-id="entryId" :can-upload="true" :can-delete="true" />
+      </div>
     </section>
   </AppLayout>
 </template>

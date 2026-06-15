@@ -19,6 +19,7 @@ const teams = ref([]);
 const loading = ref(true);
 const errorMessage = ref("");
 const saving = ref(false);
+const formVisible = ref(false);
 const filters = ref({
   keyword: "",
   role: "",
@@ -62,6 +63,8 @@ const filteredUsers = computed(() => {
 
 const requiresTeam = computed(() => formState.value.role === "personal" || formState.value.role === "team_admin");
 const editing = computed(() => Boolean(formState.value.id));
+const formTitle = computed(() => (editing.value ? `编辑账号：${formState.value.username}` : "新建账号"));
+const submitLabel = computed(() => (editing.value ? "保存修改" : "创建账号"));
 
 function resetForm() {
   formState.value = {
@@ -73,6 +76,16 @@ function resetForm() {
     team_id: "",
     is_active: true,
   };
+}
+
+function openCreateForm() {
+  resetForm();
+  formVisible.value = true;
+}
+
+function closeForm() {
+  resetForm();
+  formVisible.value = false;
 }
 
 function getTeamName(teamId) {
@@ -88,6 +101,16 @@ function startEdit(user) {
     role: user.role,
     team_id: user.team_id || "",
     is_active: !!user.is_active,
+  };
+  formVisible.value = true;
+}
+
+function resetFilters() {
+  filters.value = {
+    keyword: "",
+    role: "",
+    teamId: "",
+    status: "",
   };
 }
 
@@ -132,7 +155,7 @@ async function handleSubmit() {
       await createUser(payload);
     }
 
-    resetForm();
+    closeForm();
     await loadPage();
   } catch (error) {
     errorMessage.value = error.message || "保存用户失败";
@@ -153,20 +176,6 @@ async function handleDisable(user) {
   }
 }
 
-async function handleEnable(user) {
-  try {
-    await updateUser(user.id, {
-      real_name: user.real_name,
-      role: user.role,
-      team_id: user.team_id,
-      is_active: true,
-    });
-    await loadPage();
-  } catch (error) {
-    errorMessage.value = error.message || "启用失败";
-  }
-}
-
 async function handleResetPassword(user) {
   const password = window.prompt(`请输入账号 ${user.username} 的新密码`, "");
   if (!password) {
@@ -175,6 +184,7 @@ async function handleResetPassword(user) {
   try {
     await resetUserPassword(user.id, password);
     window.alert("密码已重置。");
+    await loadPage();
   } catch (error) {
     errorMessage.value = error.message || "重置密码失败";
   }
@@ -192,6 +202,20 @@ async function handleDelete(user) {
   }
 }
 
+async function handleEnable(user) {
+  try {
+    await updateUser(user.id, {
+      real_name: user.real_name,
+      role: user.role,
+      team_id: user.team_id,
+      is_active: true,
+    });
+    await loadPage();
+  } catch (error) {
+    errorMessage.value = error.message || "启用失败";
+  }
+}
+
 async function handleLogout() {
   try {
     await logout();
@@ -200,146 +224,147 @@ async function handleLogout() {
   }
 }
 
-onMounted(loadPage);
+onMounted(async () => {
+  formVisible.value = false;
+  await loadPage();
+});
 </script>
 
 <template>
-  <AppLayout title="用户管理" subtitle="对接 `/api/users` 与 `/api/teams`。" :current-user="currentUser" @logout="handleLogout">
+  <AppLayout title="账号管理" :current-user="currentUser" @logout="handleLogout">
     <ErrorAlert :message="errorMessage" />
     <LoadingBlock v-if="loading" label="正在加载用户与团队..." />
 
-    <div v-else class="page-grid with-side-panel">
+    <section v-else class="page-grid two-column">
       <section class="panel">
         <div class="panel-header">
-          <div>
-            <h2>用户列表</h2>
-            <p class="muted-text">支持列表、新增、编辑、停用、启用、重置密码与删除。</p>
-          </div>
-          <button class="ghost-button" type="button" @click="loadPage">刷新</button>
+          <h2 id="user-form-title">{{ formTitle }}</h2>
+          <button v-if="!formVisible" class="btn btn-primary" type="button" @click="openCreateForm">新建账号</button>
         </div>
-
-        <div class="filter-grid">
-          <input v-model="filters.keyword" class="table-filter" type="text" placeholder="搜索用户名或姓名" />
-          <select v-model="filters.role" class="table-filter">
-            <option value="">全部角色</option>
-            <option value="super_admin">超级管理员</option>
-            <option value="academic_admin">教务账号</option>
-            <option value="team_admin">团队账号</option>
-            <option value="personal">个人账号</option>
-            <option value="interviewer">面试官</option>
-          </select>
-          <select v-model="filters.teamId" class="table-filter">
-            <option value="">全部团队</option>
-            <option v-for="team in teams" :key="team.id" :value="String(team.id)">{{ team.name }}</option>
-          </select>
-          <select v-model="filters.status" class="table-filter">
-            <option value="">全部状态</option>
-            <option value="active">启用</option>
-            <option value="inactive">停用</option>
-          </select>
-        </div>
-
-        <EmptyState v-if="!filteredUsers.length" title="暂无符合条件的用户" />
-        <div v-else class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>用户名</th>
-                <th>姓名</th>
-                <th>角色</th>
-                <th>团队</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="user in filteredUsers" :key="user.id">
-                <td>{{ user.username }}</td>
-                <td>{{ user.real_name }}</td>
-                <td>{{ getRoleLabel(user.role) }}</td>
-                <td>{{ getTeamName(user.team_id) }}</td>
-                <td>
-                  <StatusBadge :text="user.is_active ? '启用' : '停用'" :tone="user.is_active ? 'success' : 'danger'" />
-                </td>
-                <td>
-                  <div class="action-row">
-                    <button class="ghost-button" type="button" @click="startEdit(user)">编辑</button>
-                    <button class="ghost-button" type="button" @click="handleResetPassword(user)">重置密码</button>
-                    <button
-                      v-if="user.is_active"
-                      class="danger-button"
-                      type="button"
-                      @click="handleDisable(user)"
-                    >
-                      停用
-                    </button>
-                    <button
-                      v-else
-                      class="primary-button"
-                      type="button"
-                      @click="handleEnable(user)"
-                    >
-                      启用
-                    </button>
-                    <button class="danger-button" type="button" @click="handleDelete(user)">删除</button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="panel-body" :class="{ hidden: !formVisible }">
+          <form class="stack-form" @submit.prevent="handleSubmit">
+            <label class="field-block">
+              <span>用户名</span>
+              <input v-model="formState.username" :disabled="editing" type="text" required />
+            </label>
+            <label class="field-block">
+              <span>密码</span>
+              <input v-model="formState.password" type="password" :required="!editing" />
+            </label>
+            <label class="field-block">
+              <span>真实姓名</span>
+              <input v-model="formState.real_name" type="text" required />
+            </label>
+            <label class="field-block">
+              <span>角色</span>
+              <select v-model="formState.role" required>
+                <option value="super_admin">超级管理员</option>
+                <option value="academic_admin">教务账号</option>
+                <option value="team_admin">团队账号</option>
+                <option value="personal">个人账号</option>
+                <option value="interviewer">面试官</option>
+              </select>
+            </label>
+            <label class="field-block">
+              <span>所属团队</span>
+              <select v-model="formState.team_id">
+                <option value="">不绑定团队</option>
+                <option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option>
+              </select>
+            </label>
+            <p class="muted-text">{{ requiresTeam ? "当前角色必须选择团队。" : "超级管理员和教务账号可以不绑定团队。" }}</p>
+            <label class="checkbox-line">
+              <input v-model="formState.is_active" type="checkbox" />
+              <span>启用账号</span>
+            </label>
+            <div class="form-actions">
+              <button class="btn btn-primary" type="submit" :disabled="saving">
+                {{ saving ? "提交中..." : submitLabel }}
+              </button>
+              <button class="btn btn-secondary" type="button" @click="closeForm">取消</button>
+            </div>
+          </form>
         </div>
       </section>
 
-      <section class="panel side-panel">
+      <section class="panel">
         <div class="panel-header">
-          <div>
-            <h2>{{ editing ? "编辑用户" : "新增用户" }}</h2>
-            <p class="muted-text">当前后端没有单独的启用接口，启用动作通过 `PUT /api/users/:id` 完成。</p>
+          <h2>账号列表</h2>
+          <button class="btn btn-secondary" type="button" @click="loadPage">刷新</button>
+        </div>
+        <div class="panel-body">
+          <div class="filter-toolbar">
+            <label class="field-block filter-field">
+              <span>搜索</span>
+              <input v-model="filters.keyword" type="text" placeholder="搜索用户名 / 姓名" />
+            </label>
+            <label class="field-block filter-field">
+              <span>角色</span>
+              <select v-model="filters.role">
+                <option value="">全部角色</option>
+                <option value="super_admin">超级管理员</option>
+                <option value="academic_admin">教务账号</option>
+                <option value="team_admin">团队账号</option>
+                <option value="personal">个人账号</option>
+              </select>
+            </label>
+            <label class="field-block filter-field">
+              <span>团队</span>
+              <select v-model="filters.teamId">
+                <option value="">全部团队</option>
+                <option v-for="team in teams" :key="team.id" :value="String(team.id)">{{ team.name }}</option>
+              </select>
+            </label>
+            <label class="field-block filter-field">
+              <span>状态</span>
+              <select v-model="filters.status">
+                <option value="">全部状态</option>
+                <option value="active">启用</option>
+                <option value="inactive">禁用</option>
+              </select>
+            </label>
+            <div class="filter-actions">
+              <button class="btn btn-secondary" type="button" @click="resetFilters">重置筛选</button>
+            </div>
+          </div>
+
+          <EmptyState v-if="!filteredUsers.length" title="暂无数据" />
+          <div v-else class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>用户名</th>
+                  <th>姓名</th>
+                  <th>角色</th>
+                  <th>团队</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="user in filteredUsers" :key="user.id">
+                  <td>{{ user.username }}</td>
+                  <td>{{ user.real_name }}</td>
+                  <td>{{ getRoleLabel(user.role) }}</td>
+                  <td>{{ getTeamName(user.team_id) }}</td>
+                  <td>
+                    <StatusBadge :text="user.is_active ? '启用' : '禁用'" :tone="user.is_active ? 'success' : 'danger'" />
+                  </td>
+                  <td>
+                    <div class="form-actions">
+                      <button class="btn btn-secondary" type="button" @click="startEdit(user)">编辑</button>
+                      <button class="btn btn-secondary" type="button" @click="handleResetPassword(user)">重置密码</button>
+                      <button v-if="user.is_active" class="btn btn-danger" type="button" @click="handleDisable(user)">禁用</button>
+                      <button v-else class="btn btn-primary" type="button" @click="handleEnable(user)">启用</button>
+                      <button class="btn btn-danger" type="button" @click="handleDelete(user)">删除</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
-
-        <form class="stack-form" @submit.prevent="handleSubmit">
-          <label class="field-block">
-            <span>用户名</span>
-            <input v-model="formState.username" :disabled="editing" type="text" required />
-          </label>
-          <label class="field-block">
-            <span>{{ editing ? "新密码（可选）" : "初始密码" }}</span>
-            <input v-model="formState.password" type="password" :required="!editing" />
-          </label>
-          <label class="field-block">
-            <span>姓名</span>
-            <input v-model="formState.real_name" type="text" required />
-          </label>
-          <label class="field-block">
-            <span>角色</span>
-            <select v-model="formState.role">
-              <option value="super_admin">超级管理员</option>
-              <option value="academic_admin">教务账号</option>
-              <option value="team_admin">团队账号</option>
-              <option value="personal">个人账号</option>
-              <option value="interviewer">面试官</option>
-            </select>
-          </label>
-          <label class="field-block">
-            <span>团队</span>
-            <select v-model="formState.team_id" :required="requiresTeam">
-              <option value="">不绑定团队</option>
-              <option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option>
-            </select>
-          </label>
-          <label class="checkbox-field">
-            <input v-model="formState.is_active" type="checkbox" />
-            <span>启用状态</span>
-          </label>
-          <div class="action-row">
-            <button class="primary-button" type="submit" :disabled="saving">
-              {{ saving ? "保存中..." : editing ? "保存修改" : "创建用户" }}
-            </button>
-            <button class="ghost-button" type="button" @click="resetForm">重置</button>
-          </div>
-        </form>
       </section>
-    </div>
+    </section>
   </AppLayout>
 </template>

@@ -1,13 +1,14 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
 
 import {
   deleteDocument,
   downloadDocument,
   generateBilingualDocument,
+  getBilingualEditor,
   listEntryDocuments,
   previewDocument,
+  saveBilingualEditor,
   translatePreviewDocument,
   uploadEntryDocument,
 } from "../api/documents.js";
@@ -30,10 +31,6 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
-  embedded: {
-    type: Boolean,
-    default: false,
-  },
 });
 
 const emit = defineEmits(["updated"]);
@@ -42,19 +39,40 @@ const documents = ref([]);
 const loading = ref(false);
 const errorMessage = ref("");
 const uploadBusy = ref(false);
-const previewHtml = ref("");
-const translatePreview = ref(null);
 const actionBusyId = ref(null);
 
-const originalDocx = computed(() =>
-  documents.value.find((item) => item.document_kind === "original" && item.file_type === "docx") || null
-);
+const previewDialog = ref(null);
+const previewTitle = ref("简表预览");
+const previewLoading = ref(false);
+const previewHtml = ref("");
+const previewOriginalText = ref("");
+const previewTranslatedText = ref("");
+const previewMode = ref("html");
+
+const editorDialog = ref(null);
+const editorLoading = ref(false);
+const editorSaving = ref(false);
+const editorData = ref(null);
+const editingDocumentId = ref(null);
+
+const originalDocx = computed(() => documents.value.find((item) => item.document_kind === "original" && item.file_type === "docx") || null);
 
 function getStatusTone(status) {
-  if (status === "generated") {
-    return "success";
-  }
-  return "warning";
+  return status === "generated" ? "success" : "warning";
+}
+
+function closePreviewDialog() {
+  previewDialog.value?.close();
+}
+
+function closeEditorDialog() {
+  editorDialog.value?.close();
+}
+
+function resetPreviewState() {
+  previewHtml.value = "";
+  previewOriginalText.value = "";
+  previewTranslatedText.value = "";
 }
 
 async function loadDocuments() {
@@ -62,7 +80,6 @@ async function loadDocuments() {
     documents.value = [];
     return;
   }
-
   loading.value = true;
   errorMessage.value = "";
   try {
@@ -77,12 +94,8 @@ async function loadDocuments() {
 
 async function handleUpload(event) {
   const [file] = event.target.files || [];
-  if (!file || !props.entryId) {
-    return;
-  }
-
+  if (!file || !props.entryId) return;
   uploadBusy.value = true;
-  errorMessage.value = "";
   try {
     await uploadEntryDocument(props.entryId, file);
     await loadDocuments();
@@ -96,39 +109,48 @@ async function handleUpload(event) {
 }
 
 async function handlePreview(documentId) {
-  actionBusyId.value = `preview-${documentId}`;
-  previewHtml.value = "";
-  translatePreview.value = null;
+  resetPreviewState();
+  previewTitle.value = "简表预览";
+  previewMode.value = "html";
+  previewLoading.value = true;
+  previewDialog.value?.showModal();
   try {
     const result = await previewDocument(documentId);
     previewHtml.value = result?.data?.html || "";
   } catch (error) {
+    previewDialog.value?.close();
     errorMessage.value = error.message || "预览失败";
   } finally {
-    actionBusyId.value = null;
+    previewLoading.value = false;
   }
 }
 
 async function handleTranslatePreview(documentId) {
-  actionBusyId.value = `translate-${documentId}`;
-  previewHtml.value = "";
-  translatePreview.value = null;
+  resetPreviewState();
+  previewTitle.value = "翻译预览";
+  previewMode.value = "translate";
+  previewLoading.value = true;
+  previewDialog.value?.showModal();
   try {
     const result = await translatePreviewDocument(documentId);
-    translatePreview.value = result?.data || null;
+    previewOriginalText.value = result?.data?.original_text || "";
+    previewTranslatedText.value = result?.data?.translated_text || "";
   } catch (error) {
+    previewDialog.value?.close();
     errorMessage.value = error.message || "翻译预览失败";
   } finally {
-    actionBusyId.value = null;
+    previewLoading.value = false;
   }
 }
 
 async function handleGenerateBilingual() {
   if (!originalDocx.value) {
-    errorMessage.value = "当前没有可生成双语简表的原始 DOCX 文档";
+    errorMessage.value = "请先上传中文 DOCX 简表文件";
     return;
   }
-
+  if (!window.confirm("将调用 AI 生成中英双语简表，可能需要几十秒。\n确认生成吗？")) {
+    return;
+  }
   actionBusyId.value = `generate-${originalDocx.value.id}`;
   try {
     await generateBilingualDocument(originalDocx.value.id);
@@ -142,9 +164,7 @@ async function handleGenerateBilingual() {
 }
 
 async function handleDelete(documentId) {
-  if (!window.confirm("确认删除该文档吗？")) {
-    return;
-  }
+  if (!window.confirm("确认删除该简表文件吗？")) return;
   actionBusyId.value = `delete-${documentId}`;
   try {
     await deleteDocument(documentId);
@@ -157,11 +177,40 @@ async function handleDelete(documentId) {
   }
 }
 
+async function openBilingualEditor(documentId) {
+  editorLoading.value = true;
+  editorData.value = null;
+  editingDocumentId.value = documentId;
+  editorDialog.value?.showModal();
+  try {
+    const result = await getBilingualEditor(documentId);
+    editorData.value = result?.data?.editor || null;
+  } catch (error) {
+    editorDialog.value?.close();
+    errorMessage.value = error.message || "加载双语编辑器失败";
+  } finally {
+    editorLoading.value = false;
+  }
+}
+
+async function handleSaveEditor() {
+  if (!editingDocumentId.value || !editorData.value) return;
+  editorSaving.value = true;
+  try {
+    await saveBilingualEditor(editingDocumentId.value, editorData.value);
+    editorDialog.value?.close();
+    await loadDocuments();
+    emit("updated");
+  } catch (error) {
+    errorMessage.value = error.message || "保存失败";
+  } finally {
+    editorSaving.value = false;
+  }
+}
+
 watch(
   () => props.entryId,
   () => {
-    previewHtml.value = "";
-    translatePreview.value = null;
     loadDocuments();
   },
   { immediate: true }
@@ -171,96 +220,137 @@ watch(
 <template>
   <section class="panel">
     <div class="panel-header">
-      <div>
-        <h2>文档与双语简表</h2>
-        <p class="muted-text">上传简表、查看列表、预览、下载和双语编辑都通过现有后端接口完成。</p>
-      </div>
-      <div class="action-row">
-        <label v-if="canUpload" class="button-like primary-button">
-          {{ uploadBusy ? "上传中..." : "上传文档" }}
+      <h2>简表管理</h2>
+      <div class="form-actions">
+        <label v-if="canUpload" class="btn btn-primary">
+          {{ uploadBusy ? "上传中..." : "上传简表" }}
           <input class="hidden-input" type="file" accept=".docx,.pdf" :disabled="uploadBusy" @change="handleUpload" />
         </label>
-        <button class="ghost-button" type="button" :disabled="!originalDocx || !!actionBusyId" @click="handleGenerateBilingual">
-          生成双语简表
+        <button class="btn btn-secondary" type="button" :disabled="!originalDocx || !!actionBusyId" @click="handleGenerateBilingual">
+          生成中英双语简表
         </button>
       </div>
     </div>
 
-    <ErrorAlert :message="errorMessage" />
+    <div class="panel-body">
+      <ErrorAlert :message="errorMessage" />
+      <LoadingBlock v-if="loading" label="加载中..." />
+      <EmptyState v-else-if="!documents.length" title="暂无简表文件" />
 
-    <LoadingBlock v-if="loading" label="正在加载文档列表..." />
-    <EmptyState
-      v-else-if="!documents.length"
-      title="暂无文档"
-      description="上传原始 DOCX 或 PDF 后，可在这里下载、预览或生成双语简表。"
-    />
-
-    <div v-else class="stack-list">
-      <article v-for="document in documents" :key="document.id" class="list-card">
-        <div class="list-card-head">
-          <div>
-            <h3>{{ document.original_filename }}</h3>
-            <p class="muted-text">
-              {{ document.file_type.toUpperCase() }} · {{ formatDateTime(document.created_at) }} · {{ document.document_kind }}
-            </p>
+      <div v-else class="document-list">
+        <article v-for="document in documents" :key="document.id" class="document-item">
+          <div class="document-item-meta">
+            <strong>{{ document.original_filename }}</strong>
+            <span class="muted-text">{{ document.file_type.toUpperCase() }} | {{ formatDateTime(document.created_at) }} | {{ document.document_kind }}</span>
           </div>
-          <StatusBadge :text="document.translation_status" :tone="getStatusTone(document.translation_status)" />
-        </div>
 
-        <div class="action-row">
-          <button class="ghost-button" type="button" :disabled="!!actionBusyId" @click="downloadDocument(document.id)">下载</button>
-          <button
-            v-if="document.file_type === 'docx'"
-            class="ghost-button"
-            type="button"
-            :disabled="!!actionBusyId"
-            @click="handlePreview(document.id)"
-          >
-            预览
-          </button>
-          <button
-            v-if="document.file_type === 'docx' && document.document_kind === 'original'"
-            class="ghost-button"
-            type="button"
-            :disabled="!!actionBusyId"
-            @click="handleTranslatePreview(document.id)"
-          >
-            翻译预览
-          </button>
-          <RouterLink
-            v-if="document.file_type === 'docx' && document.document_kind === 'bilingual'"
-            class="ghost-button link-button"
-            :to="`/documents/${document.id}/bilingual-editor`"
-          >
-            双语编辑
-          </RouterLink>
-          <button
-            v-if="canDelete"
-            class="danger-button"
-            type="button"
-            :disabled="!!actionBusyId"
-            @click="handleDelete(document.id)"
-          >
-            删除
-          </button>
-        </div>
-      </article>
-    </div>
-
-    <div v-if="previewHtml" class="preview-panel">
-      <h3>文档预览</h3>
-      <div class="html-preview" v-html="previewHtml" />
-    </div>
-
-    <div v-if="translatePreview" class="preview-panel split-preview">
-      <div>
-        <h3>原文</h3>
-        <pre>{{ translatePreview.original_text }}</pre>
-      </div>
-      <div>
-        <h3>英文预览</h3>
-        <pre>{{ translatePreview.translated_text }}</pre>
+          <div class="form-actions">
+            <StatusBadge :text="document.translation_status" :tone="getStatusTone(document.translation_status)" />
+            <button class="btn btn-secondary" type="button" :disabled="!!actionBusyId" @click="downloadDocument(document.id)">下载</button>
+            <button v-if="document.file_type === 'docx'" class="btn btn-secondary" type="button" :disabled="!!actionBusyId" @click="handlePreview(document.id)">预览</button>
+            <button
+              v-if="document.file_type === 'docx' && document.document_kind === 'original'"
+              class="btn btn-secondary"
+              type="button"
+              :disabled="!!actionBusyId"
+              @click="handleTranslatePreview(document.id)"
+            >
+              翻译预览
+            </button>
+            <button
+              v-if="document.file_type === 'docx' && document.document_kind === 'bilingual'"
+              class="btn btn-secondary"
+              type="button"
+              :disabled="!!actionBusyId"
+              @click="openBilingualEditor(document.id)"
+            >
+              编辑双语
+            </button>
+            <button v-if="canDelete" class="btn btn-danger" type="button" :disabled="!!actionBusyId" @click="handleDelete(document.id)">删除</button>
+          </div>
+        </article>
       </div>
     </div>
+
+    <dialog ref="previewDialog" class="panel modal-dialog">
+      <div class="modal-shell">
+        <div class="panel-header modal-header">
+          <h3>{{ previewTitle }}</h3>
+          <button class="btn btn-secondary" type="button" @click="closePreviewDialog">关闭</button>
+        </div>
+        <div class="panel-body stack-form modal-body">
+          <div v-if="previewLoading" class="modal-note">加载中...</div>
+          <div v-else-if="previewMode === 'html'" class="docx-preview-content" v-html="previewHtml" />
+          <div v-else class="split-preview">
+            <div>
+              <strong>原文预览</strong>
+              <pre class="preview-box">{{ previewOriginalText }}</pre>
+            </div>
+            <div>
+              <strong>英文预览</strong>
+              <pre class="preview-box">{{ previewTranslatedText }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog ref="editorDialog" class="panel modal-dialog bilingual-editor-modal">
+      <div class="modal-shell">
+        <div class="panel-header modal-header">
+          <h3>编辑双语简表</h3>
+          <button class="btn btn-secondary" type="button" @click="closeEditorDialog">关闭</button>
+        </div>
+        <div class="panel-body stack-form modal-body">
+          <div v-if="editorLoading" class="modal-note">加载中...</div>
+          <template v-else-if="editorData">
+            <div v-for="item in editorData.short_fields || []" :key="item.key" class="bilingual-row">
+              <div class="bilingual-head"><strong>{{ item.label }}</strong></div>
+              <div class="bilingual-columns">
+                <label class="field-block"><span>中文</span><input :value="item.zh_text" readonly /></label>
+                <label class="field-block"><span>English</span><input v-model="item.en_text" /></label>
+              </div>
+            </div>
+
+            <div v-for="item in editorData.work_experiences || []" :key="`work-${item.index}`" class="bilingual-editor-block">
+              <strong>工作经历 {{ item.index }}</strong>
+              <div class="bilingual-columns">
+                <label class="field-block"><span>公司中文</span><input :value="item.organization_zh" readonly /></label>
+                <label class="field-block"><span>公司英文</span><input v-model="item.organization_en" /></label>
+                <label class="field-block"><span>职务中文</span><input :value="item.position_zh" readonly /></label>
+                <label class="field-block"><span>职务英文</span><input v-model="item.position_en" /></label>
+              </div>
+            </div>
+
+            <div v-for="item in editorData.education_experiences || []" :key="`edu-${item.index}`" class="bilingual-editor-block">
+              <strong>教育经历 {{ item.index }}</strong>
+              <div class="bilingual-columns">
+                <label class="field-block"><span>院校中文</span><input :value="item.institution_zh" readonly /></label>
+                <label class="field-block"><span>院校英文</span><input v-model="item.institution_en" /></label>
+                <label class="field-block"><span>课程中文</span><input :value="item.course_zh" readonly /></label>
+                <label class="field-block"><span>课程英文</span><input v-model="item.course_en" /></label>
+                <label class="field-block"><span>学位中文</span><input :value="item.degree_zh" readonly /></label>
+                <label class="field-block"><span>学位英文</span><input v-model="item.degree_en" /></label>
+              </div>
+            </div>
+
+            <div v-for="item in editorData.long_fields || []" :key="item.key" class="bilingual-row">
+              <div class="bilingual-head"><strong>{{ item.label }}</strong></div>
+              <div class="bilingual-columns">
+                <label class="field-block"><span>中文</span><textarea :value="item.zh_text" rows="8" readonly /></label>
+                <label class="field-block"><span>English</span><textarea v-model="item.en_text" rows="8" /></label>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn btn-primary" type="button" :disabled="editorSaving" @click="handleSaveEditor">
+                {{ editorSaving ? "保存中..." : "保存" }}
+              </button>
+              <button class="btn btn-secondary" type="button" @click="closeEditorDialog">取消</button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </dialog>
   </section>
 </template>

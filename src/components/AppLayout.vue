@@ -1,13 +1,9 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 const props = defineProps({
   title: {
-    type: String,
-    default: "Dashboard",
-  },
-  subtitle: {
     type: String,
     default: "",
   },
@@ -20,15 +16,26 @@ const props = defineProps({
 const emit = defineEmits(["logout"]);
 const route = useRoute();
 const router = useRouter();
+const sidebarCollapsed = ref(false);
 
-const navItems = computed(() => [
-  { label: "Dashboard", to: "/dashboard" },
-  { label: "表单管理", to: "/forms" },
-  { label: "历史表单", to: "/history" },
-  { label: "账号管理", to: "/users" },
-  { label: "团队管理", to: "/teams" },
-  { label: "文档中心", to: "/documents" },
-]);
+const navItems = computed(() => {
+  const role = props.currentUser?.role;
+  const items = [];
+  if (["super_admin", "academic_admin"].includes(role)) {
+    items.push({ label: "工作台", to: "/dashboard" });
+  }
+  if (role === "super_admin") {
+    items.push({ label: "账号管理", to: "/users" });
+    items.push({ label: "团队管理", to: "/teams" });
+  }
+  items.push({ label: "表单管理", to: "/forms" });
+  items.push({ label: "历史表单", to: "/history" });
+  return items;
+});
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+}
 
 function goHome() {
   router.push("/dashboard");
@@ -36,15 +43,17 @@ function goHome() {
 </script>
 
 <template>
-  <div class="app-layout">
-    <aside class="sidebar">
-      <button class="brand-button" type="button" @click="goHome">
-        <span class="brand-mark">DF</span>
-        <span>
-          <strong class="brand-title">Dynamic Form</strong>
-          <span class="brand-subtitle">Vue Frontend</span>
-        </span>
-      </button>
+  <div class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+    <aside class="sidebar" id="app-sidebar">
+      <div class="brand">
+        <button class="brand-button" type="button" @click="goHome">
+          <div class="brand-mark">DF</div>
+          <div class="brand-copy">
+            <div class="brand-title">动态表单协同</div>
+            <div class="brand-subtitle">管理后台</div>
+          </div>
+        </button>
+      </div>
 
       <nav class="sidebar-nav">
         <RouterLink
@@ -59,24 +68,35 @@ function goHome() {
       </nav>
     </aside>
 
-    <div class="layout-main">
+    <button
+      class="sidebar-toggle"
+      id="sidebar-toggle"
+      type="button"
+      aria-controls="app-sidebar"
+      :aria-expanded="sidebarCollapsed ? 'false' : 'true'"
+      :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+      @click="toggleSidebar"
+    >
+      <span class="sidebar-toggle-icon" aria-hidden="true">{{ sidebarCollapsed ? "›" : "‹" }}</span>
+    </button>
+
+    <div class="main-shell">
       <header class="topbar">
-        <div>
-          <h1 class="topbar-title">{{ title }}</h1>
-          <p v-if="subtitle" class="topbar-subtitle">{{ subtitle }}</p>
+        <div class="page-heading">
+          <h1 class="page-title">{{ title }}</h1>
         </div>
 
         <div class="topbar-actions">
-          <slot name="header-actions" />
           <div v-if="currentUser" class="user-chip">
-            <span class="user-name">{{ currentUser.real_name }}</span>
-            <span class="user-role">{{ currentUser.role }}</span>
+            <span class="user-chip-name">{{ currentUser.real_name || currentUser.username }}</span>
+            <span class="user-chip-role">{{ currentUser.role }}</span>
           </div>
-          <button class="ghost-button" type="button" @click="emit('logout')">退出登录</button>
+          <button class="btn btn-secondary" type="button">修改密码</button>
+          <button class="btn btn-secondary" type="button" @click="emit('logout')">退出登录</button>
         </div>
       </header>
 
-      <main class="page-shell">
+      <main class="page-content">
         <slot />
       </main>
     </div>

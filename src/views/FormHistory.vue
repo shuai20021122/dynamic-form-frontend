@@ -28,12 +28,8 @@ const pageSize = ref(10);
 const total = ref(0);
 
 function getTone(status) {
-  if (status === "closed") {
-    return "danger";
-  }
-  if (status === "active") {
-    return "success";
-  }
+  if (status === "closed") return "neutral";
+  if (status === "active") return "success";
   return "warning";
 }
 
@@ -98,13 +94,9 @@ async function handleLogout() {
 watch(
   () => route.query.formId,
   async (formId) => {
-    if (!formId || !forms.value.length) {
-      return;
-    }
+    if (!formId || !forms.value.length) return;
     const matched = forms.value.find((item) => String(item.id) === String(formId));
-    if (matched) {
-      await loadEntries(matched);
-    }
+    if (matched) await loadEntries(matched);
   }
 );
 
@@ -112,99 +104,93 @@ onMounted(async () => {
   await loadHistory();
   if (route.query.formId) {
     const matched = forms.value.find((item) => String(item.id) === String(route.query.formId));
-    if (matched) {
-      await loadEntries(matched);
-    }
+    if (matched) await loadEntries(matched);
   }
 });
 </script>
 
 <template>
-  <AppLayout title="历史表单" subtitle="对接 `/api/forms/history` 与历史填写记录接口。" :current-user="currentUser" @logout="handleLogout">
+  <AppLayout title="历史表单" :current-user="currentUser" @logout="handleLogout">
     <ErrorAlert :message="errorMessage" />
-    <LoadingBlock v-if="loading" label="正在加载历史表单..." />
+    <LoadingBlock v-if="loading" label="加载中..." />
 
-    <div v-else class="page-grid two-columns">
+    <template v-else>
       <section class="panel">
         <div class="panel-header">
-          <div>
-            <h2>历史表单列表</h2>
-            <p class="muted-text">支持搜索、查看记录、导出以及重新开启。</p>
-          </div>
+          <h2>历史表单</h2>
         </div>
-
-        <div class="filter-grid compact-grid">
-          <input v-model="keyword" class="table-filter" type="text" placeholder="按表单标题搜索" />
-          <button class="primary-button" type="button" @click="page = 1; loadHistory()">搜索</button>
-          <button class="ghost-button" type="button" @click="keyword = ''; page = 1; loadHistory()">重置</button>
-        </div>
-
-        <EmptyState v-if="!forms.length" title="暂无历史表单" />
-        <div v-else class="stack-list">
-          <article v-for="form in forms" :key="form.id" class="list-card">
-            <div class="list-card-head">
-              <div>
-                <h3>{{ form.display_title || form.title }}</h3>
-                <p class="muted-text">{{ formatDateTime(form.updated_at) }}</p>
-              </div>
-              <StatusBadge :text="getFormStatusLabel(form.status)" :tone="getTone(form.status)" />
-            </div>
-            <div class="action-row">
-              <button class="ghost-button" type="button" @click="loadEntries(form)">查看记录</button>
-              <button class="primary-button" type="button" @click="exportForm(form.id)">导出 Excel</button>
-              <button class="ghost-button" type="button" @click="handleReopen(form.id)">重新开启</button>
-            </div>
-          </article>
-        </div>
-
-        <div class="pager-row">
-          <button class="ghost-button" type="button" :disabled="page <= 1" @click="page -= 1; loadHistory()">上一页</button>
-          <span class="muted-text">第 {{ page }} 页，共 {{ Math.max(1, Math.ceil(total / pageSize)) }} 页</span>
-          <button
-            class="ghost-button"
-            type="button"
-            :disabled="page >= Math.max(1, Math.ceil(total / pageSize))"
-            @click="page += 1; loadHistory()"
-          >
-            下一页
-          </button>
+        <div class="panel-body">
+          <form class="inline-form" @submit.prevent="page = 1; loadHistory()">
+            <input v-model="keyword" type="text" placeholder="按标题搜索" />
+            <button class="btn btn-primary" type="submit">搜索</button>
+            <button class="btn btn-secondary" type="button" @click="keyword = ''; page = 1; loadHistory()">重置</button>
+          </form>
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>{{ selectedForm ? `${selectedForm.display_title || selectedForm.title} 的记录` : "填写记录详情" }}</h2>
-            <p class="muted-text">支持查看每条记录的槽位、人员、团队和填写内容。</p>
+      <section class="page-grid two-column history-layout">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>历史列表</h2>
           </div>
-        </div>
+          <div class="panel-body">
+            <EmptyState v-if="!forms.length" title="暂无数据" />
+            <div v-else class="history-card-list">
+              <article v-for="form in forms" :key="form.id" class="history-card">
+                <div class="history-card-title">{{ form.display_title || form.title }}</div>
+                <div class="history-card-meta">
+                  <StatusBadge :text="getFormStatusLabel(form.status)" :tone="getTone(form.status)" />
+                  <span class="muted-text history-card-date">{{ formatDateTime(form.updated_at) }}</span>
+                </div>
+                <div class="history-card-actions">
+                  <button class="btn btn-secondary" type="button" @click="loadEntries(form)">查看记录</button>
+                  <button class="btn btn-primary" type="button" @click="exportForm(form.id)">导出</button>
+                  <button class="btn btn-secondary" type="button" @click="handleReopen(form.id)">重新开启</button>
+                </div>
+              </article>
+            </div>
+            <div class="history-card-help muted-text">点击卡片查看该表单的历史记录。</div>
+            <div class="pager">
+              <button class="btn btn-secondary" type="button" :disabled="page <= 1" @click="page -= 1; loadHistory()">上一页</button>
+              <span class="muted-text">第 {{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }} 页，共 {{ total }} 条</span>
+              <button class="btn btn-secondary" type="button" :disabled="page >= Math.max(1, Math.ceil(total / pageSize))" @click="page += 1; loadHistory()">下一页</button>
+            </div>
+          </div>
+        </section>
 
-        <LoadingBlock v-if="entriesLoading" label="正在加载记录..." />
-        <EmptyState v-else-if="!selectedForm" title="请选择左侧表单查看记录" />
-        <EmptyState v-else-if="!selectedEntries.length" title="该表单暂无历史记录" />
-        <div v-else class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>空位</th>
-                <th>姓名</th>
-                <th>团队</th>
-                <th>更新时间</th>
-                <th>填写内容</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="entry in selectedEntries" :key="entry.id">
-                <td>{{ entry.slot_title }}</td>
-                <td>{{ entry.user_real_name }}</td>
-                <td>{{ entry.team_name }}</td>
-                <td>{{ formatDateTime(entry.updated_at) }}</td>
-                <td><pre class="value-summary">{{ buildValueSummary(entry.values) }}</pre></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <section class="panel">
+          <div class="panel-header">
+            <h2>{{ selectedForm ? `${selectedForm.display_title || selectedForm.title} - 表单记录` : "表单记录" }}</h2>
+          </div>
+          <div class="panel-body">
+            <LoadingBlock v-if="entriesLoading" label="加载中..." />
+            <EmptyState v-else-if="!selectedForm" title="请选择左侧表单查看记录" />
+            <EmptyState v-else-if="!selectedEntries.length" title="暂无数据" />
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>空位</th>
+                    <th>填写人</th>
+                    <th>团队</th>
+                    <th>更新时间</th>
+                    <th>内容</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="entry in selectedEntries" :key="entry.id">
+                    <td>{{ entry.slot_title }}</td>
+                    <td>{{ entry.user_real_name }}</td>
+                    <td>{{ entry.team_name }}</td>
+                    <td>{{ formatDateTime(entry.updated_at) }}</td>
+                    <td><pre class="value-summary">{{ buildValueSummary(entry.values) }}</pre></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </section>
-    </div>
+    </template>
   </AppLayout>
 </template>

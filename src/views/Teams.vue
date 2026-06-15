@@ -83,65 +83,60 @@ onMounted(loadPage);
 </script>
 
 <template>
-  <AppLayout title="团队管理" subtitle="对接 `/api/teams`。" :current-user="currentUser" @logout="handleLogout">
+  <AppLayout title="团队管理" :current-user="currentUser" @logout="handleLogout">
     <ErrorAlert :message="errorMessage" />
     <LoadingBlock v-if="loading" label="正在加载团队..." />
 
-    <div v-else class="page-grid with-side-panel">
+    <section v-else class="page-grid two-column">
       <section class="panel">
         <div class="panel-header">
-          <div>
-            <h2>团队列表</h2>
-            <p class="muted-text">当前后端已提供团队列表、新增与编辑接口。</p>
-          </div>
-          <button class="ghost-button" type="button" @click="loadPage">刷新</button>
+          <h2>{{ editing ? `编辑团队：${formState.name}` : "新建团队" }}</h2>
         </div>
-
-        <EmptyState v-if="!teams.length" title="暂无团队" />
-        <div v-else class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>团队名称</th>
-                <th>创建时间</th>
-                <th>更新时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="team in teams" :key="team.id">
-                <td>{{ team.name }}</td>
-                <td>{{ formatDateTime(team.created_at) }}</td>
-                <td>{{ formatDateTime(team.updated_at) }}</td>
-                <td>
-                  <button class="ghost-button" type="button" @click="startEdit(team)">编辑</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel side-panel">
-        <div class="panel-header">
-          <div>
-            <h2>{{ editing ? "编辑团队" : "新增团队" }}</h2>
-          </div>
-        </div>
-
-        <form class="stack-form" @submit.prevent="handleSubmit">
+        <form class="stack-form panel-body" @submit.prevent="handleSubmit">
           <label class="field-block">
             <span>团队名称</span>
             <input v-model="formState.name" type="text" required />
           </label>
-          <div class="action-row">
-            <button class="primary-button" type="submit" :disabled="saving">
-              {{ saving ? "保存中..." : editing ? "保存修改" : "创建团队" }}
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" :disabled="saving">
+              {{ saving ? "保存中..." : "保存" }}
             </button>
-            <button class="ghost-button" type="button" @click="resetForm">重置</button>
+            <button class="btn btn-secondary" type="button" @click="resetForm">取消编辑</button>
           </div>
         </form>
       </section>
-    </div>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>团队列表</h2>
+          <button class="btn btn-secondary" type="button" @click="loadPage">刷新</button>
+        </div>
+        <div class="panel-body">
+          <EmptyState v-if="!teams.length" title="暂无数据" />
+          <div v-else class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>团队名称</th>
+                  <th>创建时间</th>
+                  <th>更新时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="team in teams" :key="team.id">
+                  <td>{{ team.name }}</td>
+                  <td>{{ formatDateTime(team.created_at) }}</td>
+                  <td>{{ formatDateTime(team.updated_at) }}</td>
+                  <td>
+                    <button class="btn btn-secondary" type="button" @click="startEdit(team)">编辑</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
   </AppLayout>
 </template>

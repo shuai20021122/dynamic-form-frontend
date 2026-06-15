@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import AppLayout from "../components/AppLayout.vue";
@@ -13,6 +13,13 @@ const router = useRouter();
 const currentUser = ref(null);
 const loading = ref(true);
 const errorMessage = ref("");
+
+const quickLinks = computed(() => [
+  { title: "表单管理", description: "创建、发布、关闭或查看表单。", href: "/forms", visible: true },
+  { title: "历史表单", description: "查看历史记录和导出数据。", href: "/history", visible: true },
+  { title: "账号管理", description: "管理系统账号。", href: "/users", visible: currentUser.value?.role === "super_admin" },
+  { title: "团队管理", description: "维护团队信息。", href: "/teams", visible: currentUser.value?.role === "super_admin" },
+]);
 
 async function loadCurrentUser() {
   loading.value = true;
@@ -34,64 +41,51 @@ async function handleLogout() {
   }
 }
 
+function jumpTo(path) {
+  router.push(path);
+}
+
 onMounted(loadCurrentUser);
 </script>
 
 <template>
-  <AppLayout
-    title="Dashboard"
-    subtitle="Vue 前端迁移壳页已经接通认证、导航和基础会话恢复。"
-    :current-user="currentUser"
-    @logout="handleLogout"
-  >
+  <AppLayout title="工作台" :current-user="currentUser" @logout="handleLogout">
     <ErrorAlert :message="errorMessage" />
-    <LoadingBlock v-if="loading" label="正在获取当前用户..." />
+    <LoadingBlock v-if="loading" label="加载中..." />
 
-    <section v-else-if="currentUser" class="page-grid two-columns">
-      <article class="panel">
+    <template v-else-if="currentUser">
+      <section class="dashboard-hero panel">
+        <div class="panel-body dashboard-hero-body">
+          <div class="dashboard-hero-copy">
+            <div class="dashboard-hero-eyebrow">Workspace</div>
+            <h2 class="dashboard-hero-title">欢迎回来</h2>
+            <p class="lead-text dashboard-hero-text">{{ currentUser.real_name }}，当前角色为 {{ getRoleLabel(currentUser.role) }}。你可以从下面的快捷入口继续工作。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="panel-header">
-          <div>
-            <h2>当前登录用户</h2>
-            <p class="muted-text">这个区域通过 `GET /api/auth/me` 获取会话信息。</p>
+          <h2>快捷入口</h2>
+        </div>
+        <div class="panel-body">
+          <div class="card-grid">
+            <button
+              v-for="item in quickLinks.filter((item) => item.visible)"
+              :key="item.href"
+              class="shortcut-card"
+              type="button"
+              @click="jumpTo(item.href)"
+            >
+              <h3>{{ item.title }}</h3>
+              <p>{{ item.description }}</p>
+              <span class="btn btn-secondary">进入</span>
+            </button>
           </div>
         </div>
+      </section>
+    </template>
 
-        <div class="summary-grid">
-          <div class="summary-card">
-            <span class="meta-label">用户名</span>
-            <strong>{{ currentUser.username }}</strong>
-          </div>
-          <div class="summary-card">
-            <span class="meta-label">姓名</span>
-            <strong>{{ currentUser.real_name }}</strong>
-          </div>
-          <div class="summary-card">
-            <span class="meta-label">角色</span>
-            <strong>{{ getRoleLabel(currentUser.role) }}</strong>
-          </div>
-          <div class="summary-card">
-            <span class="meta-label">团队 ID</span>
-            <strong>{{ currentUser.team_id ?? "-" }}</strong>
-          </div>
-        </div>
-      </article>
-
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>迁移进度</h2>
-            <p class="muted-text">当前阶段已将主要业务页迁入 Vue 前端，但仍保留 Flask 模板页兼容访问。</p>
-          </div>
-        </div>
-
-        <ul class="simple-list">
-          <li>认证：登录、当前用户、退出登录</li>
-          <li>基础页面：Dashboard、用户、团队、表单、设计、填写、历史、文档、双语编辑</li>
-          <li>仍保留旧 Flask 页面，不删除 `templates/` 与 `static/`</li>
-        </ul>
-      </article>
-    </section>
-
-    <EmptyState v-else title="当前没有可展示的用户信息" />
+    <EmptyState v-else title="暂无数据" />
   </AppLayout>
 </template>

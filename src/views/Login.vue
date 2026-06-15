@@ -10,7 +10,7 @@ const route = useRoute();
 const username = ref("");
 const password = ref("");
 const captchaAnswer = ref("");
-const captchaQuestion = ref("加载中...");
+const captchaQuestion = ref("验证码加载中...");
 const submitting = ref(false);
 const loadingCaptcha = ref(false);
 const errorMessage = ref("");
@@ -57,41 +57,34 @@ onMounted(loadCaptcha);
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <p class="eyebrow">Dynamic Form Frontend</p>
-        <h1>登录</h1>
-        <p class="login-copy">Vue 前端通过 `/api/auth/*` 与 Flask 后端联调，继续沿用 Session Cookie。</p>
+        <div class="brand-mark large login-brand-mark">DF</div>
+        <h1>动态表单协同管理系统</h1>
+        <p>使用公司账号登录后台</p>
       </div>
 
-      <form class="login-form" @submit.prevent="handleSubmit">
+      <form class="stack-form" @submit.prevent="handleSubmit">
         <label class="field-block">
           <span>用户名</span>
-          <input v-model="username" type="text" autocomplete="username" required />
+          <input class="login-input" v-model="username" type="text" autocomplete="username" required />
         </label>
-
         <label class="field-block">
           <span>密码</span>
-          <input v-model="password" type="password" autocomplete="current-password" required />
+          <input class="login-input" v-model="password" type="password" autocomplete="current-password" required />
         </label>
-
         <div class="field-block">
-          <div class="captcha-row">
-            <div>
-              <span class="field-label">验证码</span>
-              <strong class="captcha-question">{{ captchaQuestion }}</strong>
-            </div>
-            <button class="ghost-button" type="button" :disabled="loadingCaptcha" @click="loadCaptcha">
-              {{ loadingCaptcha ? "刷新中..." : "刷新" }}
+          <span>验证码</span>
+          <div class="login-captcha-bar">
+            <div class="login-captcha-question">{{ captchaQuestion }}</div>
+            <button class="login-captcha-refresh" type="button" :disabled="loadingCaptcha" @click="loadCaptcha">
+              换一个
             </button>
           </div>
-          <input v-model="captchaAnswer" type="text" required />
+          <input class="login-input" v-model="captchaAnswer" type="text" required />
         </div>
-
-        <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-
-        <button class="primary-button" type="submit" :disabled="submitting">
-          {{ submitting ? "登录中..." : "登录" }}
-        </button>
+        <button class="btn btn-primary btn-block login-submit" type="submit" :disabled="submitting">登录</button>
       </form>
+
+      <div v-if="errorMessage" class="error-alert" role="alert">{{ errorMessage }}</div>
     </div>
   </div>
 </template>
