@@ -3,7 +3,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import { clearCachedCurrentUser, fetchCurrentUser, getDefaultLandingPath } from "../api/auth.js";
 import { ApiError } from "../api/request.js";
 import BilingualEditor from "../views/BilingualEditor.vue";
-import Dashboard from "../views/Dashboard.vue";
+import AuthShell from "../views/AuthShell.vue";
 import Documents from "../views/Documents.vue";
 import FormDesigner from "../views/FormDesigner.vue";
 import FormFill from "../views/FormFill.vue";
@@ -16,7 +16,7 @@ import Users from "../views/Users.vue";
 const routes = [
   {
     path: "/",
-    redirect: "/dashboard",
+    redirect: "/forms",
   },
   {
     path: "/login",
@@ -25,58 +25,63 @@ const routes = [
     meta: { guestOnly: true },
   },
   {
-    path: "/dashboard",
-    name: "dashboard",
-    component: Dashboard,
+    path: "/",
+    component: AuthShell,
     meta: { requiresAuth: true },
-  },
-  {
-    path: "/users",
-    name: "users",
-    component: Users,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/teams",
-    name: "teams",
-    component: Teams,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/forms",
-    name: "forms",
-    component: Forms,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/forms/:id/designer",
-    name: "form-designer",
-    component: FormDesigner,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/forms/:id/fill",
-    name: "form-fill",
-    component: FormFill,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/history",
-    name: "history",
-    component: FormHistory,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/documents",
-    name: "documents",
-    component: Documents,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: "/documents/:id/bilingual-editor",
-    name: "bilingual-editor",
-    component: BilingualEditor,
-    meta: { requiresAuth: true },
+    children: [
+      {
+        path: "dashboard",
+        redirect: "/forms",
+      },
+      {
+        path: "users",
+        name: "users",
+        component: Users,
+        meta: { title: "账号管理" },
+      },
+      {
+        path: "teams",
+        name: "teams",
+        component: Teams,
+        meta: { title: "团队管理" },
+      },
+      {
+        path: "forms",
+        name: "forms",
+        component: Forms,
+        meta: { title: "表单管理" },
+      },
+      {
+        path: "forms/:id/designer",
+        name: "form-designer",
+        component: FormDesigner,
+        meta: { title: "表格设计界面" },
+      },
+      {
+        path: "forms/:id/fill",
+        name: "form-fill",
+        component: FormFill,
+        meta: { title: "表单填写" },
+      },
+      {
+        path: "history",
+        name: "history",
+        component: FormHistory,
+        meta: { title: "历史表单" },
+      },
+      {
+        path: "documents",
+        name: "documents",
+        component: Documents,
+        meta: { title: "文档中心" },
+      },
+      {
+        path: "documents/:id/bilingual-editor",
+        name: "bilingual-editor",
+        component: BilingualEditor,
+        meta: { title: "编辑双语简表" },
+      },
+    ],
   },
 ];
 
@@ -94,7 +99,7 @@ router.beforeEach(async (to) => {
       if (error instanceof ApiError && error.status === 401) {
         return {
           path: "/login",
-          query: to.fullPath !== "/dashboard" ? { redirect: to.fullPath } : undefined,
+          query: to.fullPath !== "/forms" ? { redirect: to.fullPath } : undefined,
         };
       }
       throw error;

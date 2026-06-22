@@ -1,19 +1,20 @@
 <script setup>
-import { onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
-import AppLayout from "../components/AppLayout.vue";
-import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingBlock from "../components/LoadingBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
-import { fetchCurrentUser, logout } from "../api/auth.js";
+import { fetchCurrentUser } from "../api/auth.js";
 import { exportForm } from "../api/export.js";
 import { getFormEntries, listHistoryForms, reopenForm } from "../api/forms.js";
+import historyEmptyIllustration from "../assets/ui-icons/history_empty_clipboard_illustration.svg";
+import searchIcon from "../assets/ui-icons/account_search_gray.svg";
+import { getCachedResource, setCachedResource } from "../stores/resourceCache.js";
+import { currentUiLanguage, t } from "../stores/uiLanguage.js";
 import { buildValueSummary, formatDateTime, getFormStatusLabel } from "../utils/format.js";
 
 const route = useRoute();
-const router = useRouter();
 
 const currentUser = ref(null);
 const forms = ref([]);
@@ -26,6 +27,9 @@ const keyword = ref("");
 const page = ref(1);
 const pageSize = ref(10);
 const total = ref(0);
+const historyCacheKey = computed(() => `forms:history:${currentUiLanguage.value}:${keyword.value.trim()}:${page.value}:${pageSize.value}`);
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 
 function getTone(status) {
   if (status === "closed") return "neutral";
@@ -33,24 +37,41 @@ function getTone(status) {
   return "warning";
 }
 
+function isSelected(formId) {
+  return String(selectedForm.value?.id || "") === String(formId);
+}
+
 async function loadHistory() {
-  loading.value = true;
+  const cached = getCachedResource(historyCacheKey.value);
+  if (cached) {
+    currentUser.value = cached.currentUser || currentUser.value;
+    forms.value = cached.forms || [];
+    total.value = cached.total || 0;
+    loading.value = false;
+  } else {
+    loading.value = true;
+  }
   errorMessage.value = "";
   try {
     const [me, result] = await Promise.all([
-      fetchCurrentUser(true),
+      fetchCurrentUser(),
       listHistoryForms({
         keyword: keyword.value.trim(),
         page: page.value,
         page_size: pageSize.value,
-        ui_lang: "zh-CN",
+        ui_lang: currentUiLanguage.value,
       }),
     ]);
     currentUser.value = me;
     forms.value = result?.data?.items || [];
     total.value = result?.data?.pagination?.total || 0;
+    setCachedResource(historyCacheKey.value, {
+      currentUser: me,
+      forms: forms.value,
+      total: total.value,
+    });
   } catch (error) {
-    errorMessage.value = error.message || "加载历史表单失败";
+    errorMessage.value = error.message || t("history.pageTitle");
   } finally {
     loading.value = false;
   }
@@ -58,13 +79,21 @@ async function loadHistory() {
 
 async function loadEntries(form) {
   selectedForm.value = form;
-  entriesLoading.value = true;
+  const cacheKey = `forms:entries:${currentUiLanguage.value}:${form.id}`;
+  const cached = getCachedResource(cacheKey);
+  if (cached) {
+    selectedEntries.value = cached;
+    entriesLoading.value = false;
+  } else {
+    entriesLoading.value = true;
+  }
   errorMessage.value = "";
   try {
-    const result = await getFormEntries(form.id, { ui_lang: "zh-CN" });
+    const result = await getFormEntries(form.id, { ui_lang: currentUiLanguage.value });
     selectedEntries.value = result?.data?.items || [];
+    setCachedResource(cacheKey, selectedEntries.value);
   } catch (error) {
-    errorMessage.value = error.message || "加载填写记录失败";
+    errorMessage.value = error.message || t("history.recordsTitle");
   } finally {
     entriesLoading.value = false;
   }
@@ -79,16 +108,19 @@ async function handleReopen(formId) {
     }
     await loadHistory();
   } catch (error) {
-    errorMessage.value = error.message || "重新开启失败";
+    errorMessage.value = error.message || t("history.reopen");
   }
 }
 
-async function handleLogout() {
-  try {
-    await logout();
-  } finally {
-    await router.push("/login");
-  }
+function handleSearch() {
+  page.value = 1;
+  loadHistory();
+}
+
+function resetSearch() {
+  keyword.value = "";
+  page.value = 1;
+  loadHistory();
 }
 
 watch(
@@ -107,90 +139,133 @@ onMounted(async () => {
     if (matched) await loadEntries(matched);
   }
 });
+
+watch(currentUiLanguage, async () => {
+  await loadHistory();
+  if (selectedForm.value) {
+    const matched = forms.value.find((item) => String(item.id) === String(selectedForm.value?.id));
+    if (matched) {
+      await loadEntries(matched);
+      return;
+    }
+    selectedForm.value = null;
+    selectedEntries.value = [];
+  }
+});
 </script>
 
 <template>
-  <AppLayout title="历史表单" :current-user="currentUser" @logout="handleLogout">
-    <ErrorAlert :message="errorMessage" />
-    <LoadingBlock v-if="loading" label="加载中..." />
+  <ErrorAlert :message="errorMessage" />
+  <LoadingBlock v-if="loading" :label="t('common.loading')" />
 
-    <template v-else>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>历史表单</h2>
+  <section v-else class="history-page">
+    <section class="history-search-card">
+      <div class="history-search-head">
+        <h2 class="history-card-title-main">{{ t("history.pageTitle") }}</h2>
+      </div>
+      <form class="history-search-form" @submit.prevent="handleSearch">
+        <label class="history-search-field" for="history-keyword">
+          <img :src="searchIcon" alt="" aria-hidden="true" />
+          <input id="history-keyword" v-model="keyword" type="text" :placeholder="t('history.searchPlaceholder')" />
+        </label>
+        <div class="history-search-actions">
+          <button class="btn btn-primary history-search-button" type="submit">{{ t("history.search") }}</button>
+          <button class="btn btn-secondary history-reset-button" type="button" @click="resetSearch">{{ t("history.reset") }}</button>
         </div>
-        <div class="panel-body">
-          <form class="inline-form" @submit.prevent="page = 1; loadHistory()">
-            <input v-model="keyword" type="text" placeholder="按标题搜索" />
-            <button class="btn btn-primary" type="submit">搜索</button>
-            <button class="btn btn-secondary" type="button" @click="keyword = ''; page = 1; loadHistory()">重置</button>
-          </form>
+      </form>
+    </section>
+
+    <section class="history-layout">
+      <section class="history-list-card">
+        <div class="history-panel-head">
+          <h2 class="history-card-title-main">{{ t("history.listTitle") }}</h2>
+        </div>
+
+        <div class="history-list-body">
+          <div v-if="!forms.length" class="history-list-empty">{{ t("history.noHistory") }}</div>
+
+          <button
+            v-for="form in forms"
+            v-else
+            :key="form.id"
+            class="history-item-card"
+            :class="{ 'is-active': isSelected(form.id) }"
+            type="button"
+            @click="loadEntries(form)"
+          >
+            <div class="history-item-top">
+              <strong class="history-item-title">{{ form.display_title || form.title }}</strong>
+            </div>
+            <div class="history-item-meta">
+              <StatusBadge :text="getFormStatusLabel(form.status)" :tone="getTone(form.status)" />
+              <span class="history-item-date">{{ formatDateTime(form.updated_at) }}</span>
+            </div>
+            <div class="history-item-actions">
+              <button class="btn btn-secondary history-item-action" type="button" @click.stop="loadEntries(form)">{{ t("history.viewRecords") }}</button>
+              <button class="btn btn-primary history-item-action" type="button" @click.stop="exportForm(form.id)">{{ t("history.export") }}</button>
+              <button class="btn btn-secondary history-item-action" type="button" @click.stop="handleReopen(form.id)">{{ t("history.reopen") }}</button>
+            </div>
+          </button>
+        </div>
+
+        <p class="history-list-note">{{ t("history.note") }}</p>
+
+        <div class="history-pager">
+          <button class="btn btn-secondary history-pager-btn" type="button" :disabled="page <= 1" @click="page -= 1; loadHistory()">{{ t("history.prevPage") }}</button>
+          <span class="history-pager-text">{{ t("history.pageInfo", { page, totalPages, total }) }}</span>
+          <button
+            class="btn btn-secondary history-pager-btn"
+            type="button"
+            :disabled="page >= totalPages"
+            @click="page += 1; loadHistory()"
+          >
+            {{ t("history.nextPage") }}
+          </button>
         </div>
       </section>
 
-      <section class="page-grid two-column history-layout">
-        <section class="panel">
-          <div class="panel-header">
-            <h2>历史列表</h2>
-          </div>
-          <div class="panel-body">
-            <EmptyState v-if="!forms.length" title="暂无数据" />
-            <div v-else class="history-card-list">
-              <article v-for="form in forms" :key="form.id" class="history-card">
-                <div class="history-card-title">{{ form.display_title || form.title }}</div>
-                <div class="history-card-meta">
-                  <StatusBadge :text="getFormStatusLabel(form.status)" :tone="getTone(form.status)" />
-                  <span class="muted-text history-card-date">{{ formatDateTime(form.updated_at) }}</span>
-                </div>
-                <div class="history-card-actions">
-                  <button class="btn btn-secondary" type="button" @click="loadEntries(form)">查看记录</button>
-                  <button class="btn btn-primary" type="button" @click="exportForm(form.id)">导出</button>
-                  <button class="btn btn-secondary" type="button" @click="handleReopen(form.id)">重新开启</button>
-                </div>
-              </article>
-            </div>
-            <div class="history-card-help muted-text">点击卡片查看该表单的历史记录。</div>
-            <div class="pager">
-              <button class="btn btn-secondary" type="button" :disabled="page <= 1" @click="page -= 1; loadHistory()">上一页</button>
-              <span class="muted-text">第 {{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }} 页，共 {{ total }} 条</span>
-              <button class="btn btn-secondary" type="button" :disabled="page >= Math.max(1, Math.ceil(total / pageSize))" @click="page += 1; loadHistory()">下一页</button>
-            </div>
-          </div>
-        </section>
+      <section class="history-records-card">
+        <div class="history-panel-head">
+          <h2 class="history-card-title-main">{{ t("history.recordsTitle") }}</h2>
+        </div>
 
-        <section class="panel">
-          <div class="panel-header">
-            <h2>{{ selectedForm ? `${selectedForm.display_title || selectedForm.title} - 表单记录` : "表单记录" }}</h2>
-          </div>
-          <div class="panel-body">
-            <LoadingBlock v-if="entriesLoading" label="加载中..." />
-            <EmptyState v-else-if="!selectedForm" title="请选择左侧表单查看记录" />
-            <EmptyState v-else-if="!selectedEntries.length" title="暂无数据" />
-            <div v-else class="table-wrap">
-              <table class="data-table">
+        <div class="history-records-shell">
+          <LoadingBlock v-if="entriesLoading" :label="t('common.loading')" />
+
+          <template v-else-if="selectedForm">
+            <div class="table-wrap history-records-table-wrap">
+              <table class="data-table history-records-table">
                 <thead>
                   <tr>
-                    <th>空位</th>
-                    <th>填写人</th>
-                    <th>团队</th>
-                    <th>更新时间</th>
-                    <th>内容</th>
+                    <th>{{ t("history.time") }}</th>
+                    <th>{{ t("history.submitter") }}</th>
+                    <th>{{ t("history.team") }}</th>
+                    <th>{{ t("history.updatedAt") }}</th>
+                    <th>{{ t("history.content") }}</th>
                   </tr>
                 </thead>
                 <tbody>
+                  <tr v-if="!selectedEntries.length">
+                    <td class="history-records-empty-row" colspan="5">{{ t("history.noRecords") }}</td>
+                  </tr>
                   <tr v-for="entry in selectedEntries" :key="entry.id">
-                    <td>{{ entry.slot_title }}</td>
-                    <td>{{ entry.user_real_name }}</td>
-                    <td>{{ entry.team_name }}</td>
-                    <td>{{ formatDateTime(entry.updated_at) }}</td>
-                    <td><pre class="value-summary">{{ buildValueSummary(entry.values) }}</pre></td>
+                    <td>{{ entry.slot_title || "-" }}</td>
+                    <td>{{ entry.user_real_name || "-" }}</td>
+                    <td>{{ entry.team_name || "-" }}</td>
+                    <td class="history-records-datetime">{{ formatDateTime(entry.updated_at) }}</td>
+                    <td><pre class="value-summary history-value-summary">{{ buildValueSummary(entry.values) }}</pre></td>
                   </tr>
                 </tbody>
               </table>
             </div>
+          </template>
+
+          <div v-else class="history-records-empty">
+            <img :src="historyEmptyIllustration" alt="" aria-hidden="true" />
+            <p>{{ t("history.selectPrompt") }}</p>
           </div>
-        </section>
+        </div>
       </section>
-    </template>
-  </AppLayout>
+    </section>
+  </section>
 </template>

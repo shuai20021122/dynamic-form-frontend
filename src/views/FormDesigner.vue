@@ -1,16 +1,18 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 
-import AppLayout from "../components/AppLayout.vue";
+import bossKnowLogo from "../assets/boss-know-logo.png";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingBlock from "../components/LoadingBlock.vue";
-import { fetchCurrentUser, logout } from "../api/auth.js";
+import StatusBadge from "../components/StatusBadge.vue";
+import { fetchCurrentUser } from "../api/auth.js";
 import { getForm, getSimpleDesigner, publishForm, saveSimpleDesigner } from "../api/forms.js";
+import { getCachedResource, setCachedResource } from "../stores/resourceCache.js";
+import { currentUiLanguage } from "../stores/uiLanguage.js";
 import { formatDateOnly, getFormStatusLabel } from "../utils/format.js";
 
 const route = useRoute();
-const router = useRouter();
 const formId = computed(() => route.params.id);
 
 const currentUser = ref(null);
@@ -20,21 +22,89 @@ const loading = ref(true);
 const saving = ref(false);
 const publishing = ref(false);
 const errorMessage = ref("");
-const headers = ref([]);
 const slots = ref([]);
+const designerCacheKey = computed(() => `forms:designer:${formId.value}:${currentUiLanguage.value}`);
+
+const fixedHeaders = computed(() => {
+  if (currentUiLanguage.value === "en-US") {
+    return ["Name", "Gender", "Company Name", "Position", "Format", "Language", "Status"];
+  }
+
+  return ["姓名", "性别", "公司名称", "职务", "线上/现场", "语言", "状态"];
+});
+
+const copy = computed(() => {
+  if (currentUiLanguage.value === "en-US") {
+    return {
+      loading: "Loading designer...",
+      heroSuffix: "Form Designer",
+      heroNote:
+        "Header fields are fixed for all accounts. You only need to maintain the time slots in the first column.",
+      date: "Date",
+      status: "Status",
+      toolsTitle: "Design Controls",
+      toolsNote: "The top header row is fixed. Here you can only add, remove, and adjust time slots.",
+      columns: "Fixed Headers",
+      rows: "Rows",
+      addRow: "Add Row",
+      removeRow: "Remove Row",
+      preview: "Preview Fill Page",
+      save: "Save Design",
+      saving: "Saving...",
+      publish: "Publish Form",
+      publishing: "Publishing...",
+      tableTitle: "Table Blueprint",
+      tableNote: "The top header row is fixed. Only the first-column time slots can be modified.",
+      time: "Time",
+      actions: "Actions",
+      slotLabel: "Time Slot",
+      slotPlaceholder: (index) => `Time Slot ${index}`,
+      emptyCell: "Reserved Cell",
+      rowIndicator: (index) => `Row ${index}`,
+      loadFailed: "Failed to load form designer",
+      saveFailed: "Failed to save design",
+      publishFailed: "Failed to publish form",
+    };
+  }
+
+  return {
+    loading: "正在加载表单设计...",
+    heroSuffix: "表格设计界面",
+    heroNote: "顶部表头字段固定不变，您只需要维护第一列的时间段。中间单元格无需填写，会保留给填写账号后续使用。",
+    date: "日期",
+    status: "状态",
+    toolsTitle: "设计工具",
+    toolsNote: "顶部表头对所有账号都是固定的，这里只需要新增、删除和调整时间段。",
+    columns: "固定表头",
+    rows: "行数",
+    addRow: "新增行",
+    removeRow: "删除行",
+    preview: "预览填写页",
+    save: "保存设计",
+    saving: "保存中...",
+    publish: "发布表单",
+    publishing: "发布中...",
+    tableTitle: "表格蓝图",
+    tableNote: "顶部表头固定，只有第一列时间段支持修改。",
+    time: "时间",
+    actions: "操作",
+    slotLabel: "时间段",
+    slotPlaceholder: (index) => `时间段 ${index}`,
+    emptyCell: "预留单元格",
+    rowIndicator: (index) => `第 ${index} 行`,
+    loadFailed: "加载表单设计失败",
+    saveFailed: "保存设计失败",
+    publishFailed: "发布失败",
+  };
+});
+
+const headerCount = computed(() => fixedHeaders.value.length);
+const slotCount = computed(() => slots.value.length);
+const canRemoveSlot = computed(() => slots.value.length > 2);
 
 function ensureMinimum() {
-  if (!headers.value.length) headers.value = ["", "", ""];
   if (!slots.value.length) slots.value = ["", ""];
-}
-
-function addHeader() {
-  headers.value.push("");
-}
-
-function removeHeader() {
-  headers.value.pop();
-  ensureMinimum();
+  while (slots.value.length < 2) slots.value.push("");
 }
 
 function addSlot() {
@@ -42,6 +112,7 @@ function addSlot() {
 }
 
 function removeSlot() {
+  if (!canRemoveSlot.value) return;
   slots.value.pop();
   ensureMinimum();
 }
@@ -50,23 +121,41 @@ function normalize(items) {
   return items.map((item) => item.trim()).filter(Boolean);
 }
 
+function getStatusTone(status) {
+  if (status === "active") return "success";
+  if (status === "draft") return "warning";
+  return "neutral";
+}
+
 async function loadPage() {
-  loading.value = true;
+  const cached = getCachedResource(designerCacheKey.value);
+  if (cached) {
+    currentUser.value = cached.currentUser || currentUser.value;
+    form.value = cached.form || form.value;
+    design.value = cached.design || design.value;
+    slots.value = [...(cached.slots || slots.value)];
+    loading.value = false;
+  } else {
+    loading.value = true;
+  }
+
   errorMessage.value = "";
+
   try {
-    const [me, formResult, designResult] = await Promise.all([
-      fetchCurrentUser(true),
-      getForm(formId.value),
-      getSimpleDesigner(formId.value),
-    ]);
+    const [me, formResult, designResult] = await Promise.all([fetchCurrentUser(), getForm(formId.value), getSimpleDesigner(formId.value)]);
     currentUser.value = me;
     form.value = formResult?.data?.form || null;
-    design.value = designResult?.data || null;
-    headers.value = [...(design.value?.headers || [])];
+    design.value = designResult?.data || {};
     slots.value = [...(design.value?.slots || [])];
     ensureMinimum();
+    setCachedResource(designerCacheKey.value, {
+      currentUser: me,
+      form: form.value,
+      design: design.value,
+      slots: slots.value,
+    });
   } catch (error) {
-    errorMessage.value = error.message || "加载表单设计失败";
+    errorMessage.value = error.message || copy.value.loadFailed;
   } finally {
     loading.value = false;
   }
@@ -75,15 +164,16 @@ async function loadPage() {
 async function handleSave() {
   saving.value = true;
   errorMessage.value = "";
+
   try {
     await saveSimpleDesigner(formId.value, {
-      headers: normalize(headers.value),
+      headers: fixedHeaders.value,
       required_headers: [],
       slots: normalize(slots.value),
     });
     await loadPage();
   } catch (error) {
-    errorMessage.value = error.message || "保存设计失败";
+    errorMessage.value = error.message || copy.value.saveFailed;
   } finally {
     saving.value = false;
   }
@@ -92,21 +182,14 @@ async function handleSave() {
 async function handlePublish() {
   publishing.value = true;
   errorMessage.value = "";
+
   try {
     await publishForm(formId.value);
     await loadPage();
   } catch (error) {
-    errorMessage.value = error.message || "发布失败";
+    errorMessage.value = error.message || copy.value.publishFailed;
   } finally {
     publishing.value = false;
-  }
-}
-
-async function handleLogout() {
-  try {
-    await logout();
-  } finally {
-    await router.push("/login");
   }
 }
 
@@ -114,64 +197,123 @@ onMounted(loadPage);
 </script>
 
 <template>
-  <AppLayout title="表格设计界面" :current-user="currentUser" @logout="handleLogout">
-    <ErrorAlert :message="errorMessage" />
-    <LoadingBlock v-if="loading" label="正在加载表单设计..." />
+  <ErrorAlert :message="errorMessage" />
+  <LoadingBlock v-if="loading" :label="copy.loading" />
 
-    <template v-else-if="form && design">
-      <section class="panel">
-        <div class="panel-header">
-          <h2 id="designer-form-title">{{ form.display_title || form.title }} - 表格设计界面</h2>
-          <RouterLink class="btn btn-secondary" to="/forms">返回表单列表</RouterLink>
-        </div>
-        <div class="panel-body stack-form">
-          <p id="designer-form-meta" class="muted-text">日期：{{ formatDateOnly(form.start_time) }} | 状态：{{ getFormStatusLabel(form.status) }}</p>
-          <p class="muted-text">先在第一行填写表头，再在第一列填写时间段。中间空白格不需要填写，那些位置留给个人账号后续填写。</p>
-        </div>
-      </section>
+  <div v-else-if="form" class="designer-page">
+    <section class="designer-hero panel">
+      <div class="designer-hero-body">
+        <img class="designer-hero-logo" :src="bossKnowLogo" alt="BOSS KNOW" />
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>设计表格</h2>
-          <div class="form-actions">
-            <button class="btn btn-secondary" type="button" @click="addHeader">新增列</button>
-            <button class="btn btn-secondary" type="button" @click="removeHeader">删除列</button>
-            <button class="btn btn-secondary" type="button" @click="addSlot">新增行</button>
-            <button class="btn btn-secondary" type="button" @click="removeSlot">删除行</button>
-            <RouterLink class="btn btn-secondary" :to="`/forms/${form.id}/fill`">预览填写页</RouterLink>
-            <button class="btn btn-primary" type="button" :disabled="saving" @click="handleSave">
-              {{ saving ? "保存中..." : "保存设计" }}
-            </button>
-            <button class="btn btn-secondary" type="button" :disabled="publishing" @click="handlePublish">
-              {{ publishing ? "发布中..." : "发布表单" }}
-            </button>
+        <div class="designer-hero-copy">
+          <h2 id="designer-form-title" class="designer-hero-title">
+            {{ form.display_title || form.title }} - {{ copy.heroSuffix }}
+          </h2>
+
+          <div class="designer-hero-meta">
+            <span>{{ copy.date }}: {{ formatDateOnly(form.start_time) }}</span>
+            <span class="designer-hero-meta-separator"></span>
+            <span>{{ copy.status }}:</span>
+            <StatusBadge :text="getFormStatusLabel(form.status)" :tone="getStatusTone(form.status)" />
+          </div>
+
+          <p id="designer-form-meta" class="muted-text designer-hero-note">
+            {{ copy.heroNote }}
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="designer-workspace panel">
+      <div class="panel-header designer-workspace-header">
+        <div class="designer-workspace-titlewrap">
+          <h3>{{ copy.toolsTitle }}</h3>
+          <p class="muted-text designer-workspace-note">{{ copy.toolsNote }}</p>
+        </div>
+
+        <div class="designer-stats">
+          <div class="designer-stat-chip">
+            <span class="designer-stat-label">{{ copy.columns }}</span>
+            <strong>{{ headerCount }}</strong>
+          </div>
+          <div class="designer-stat-chip">
+            <span class="designer-stat-label">{{ copy.rows }}</span>
+            <strong>{{ slotCount }}</strong>
           </div>
         </div>
-        <div class="panel-body">
-          <div class="table-wrap">
-            <table class="data-table">
+      </div>
+
+      <div class="panel-body designer-workspace-body">
+        <div class="designer-toolbar">
+          <button class="btn btn-secondary" type="button" @click="addSlot">{{ copy.addRow }}</button>
+          <button class="btn btn-secondary" type="button" :disabled="!canRemoveSlot" @click="removeSlot">{{ copy.removeRow }}</button>
+          <RouterLink class="btn btn-secondary" :to="`/forms/${form.id}/fill`">{{ copy.preview }}</RouterLink>
+          <button class="btn btn-primary" type="button" :disabled="saving" @click="handleSave">
+            {{ saving ? copy.saving : copy.save }}
+          </button>
+          <button class="btn btn-secondary" type="button" :disabled="publishing" @click="handlePublish">
+            {{ publishing ? copy.publishing : copy.publish }}
+          </button>
+        </div>
+
+        <div class="designer-grid-card">
+          <div class="designer-grid-head">
+            <div>
+              <h4>{{ copy.tableTitle }}</h4>
+              <p class="muted-text designer-grid-note">{{ copy.tableNote }}</p>
+            </div>
+          </div>
+
+          <div class="table-wrap designer-table-wrap">
+            <table class="data-table designer-table">
               <thead>
                 <tr>
-                  <th>时间</th>
-                  <th v-for="(header, index) in headers" :key="`header-${index}`">
-                    <input v-model="headers[index]" type="text" :placeholder="`空白表头${index + 1}`" />
+                  <th class="designer-time-head">{{ copy.time }}</th>
+                  <th v-for="(header, index) in fixedHeaders" :key="`header-${index}`">
+                    <div class="designer-header-field">
+                      <span class="designer-cell-label">{{ `${copy.columns} ${index + 1}` }}</span>
+                      <div class="designer-fixed-header">{{ header }}</div>
+                    </div>
                   </th>
-                  <th>操作</th>
+                  <th class="designer-actions-head">{{ copy.actions }}</th>
                 </tr>
               </thead>
+
               <tbody>
                 <tr v-for="(slot, rowIndex) in slots" :key="`slot-${rowIndex}`">
-                  <td>
-                    <input v-model="slots[rowIndex]" type="text" placeholder="空白时间段" />
+                  <td class="designer-slot-cell">
+                    <div class="designer-slot-field">
+                      <span class="designer-cell-label">{{ copy.slotLabel }}</span>
+                      <input
+                        v-model="slots[rowIndex]"
+                        class="designer-input"
+                        type="text"
+                        :placeholder="copy.slotPlaceholder(rowIndex + 1)"
+                      />
+                    </div>
                   </td>
-                  <td v-for="(_, colIndex) in headers" :key="`${rowIndex}-${colIndex}`"></td>
-                  <td><span class="muted-text">删除行</span></td>
+
+                  <td v-for="(_, colIndex) in fixedHeaders" :key="`${rowIndex}-${colIndex}`" class="designer-reserved-cell">
+                    <div class="designer-reserved-field">
+                      <span class="designer-cell-label designer-cell-label--ghost" aria-hidden="true">{{ copy.slotLabel }}</span>
+                      <div class="designer-reserved-box">
+                        <span>{{ copy.emptyCell }}</span>
+                      </div>
+                    </div>
+                  </td>
+
+                  <td class="designer-row-indicator">
+                    <div class="designer-row-indicator-inner">
+                      <span class="designer-cell-label designer-cell-label--ghost" aria-hidden="true">{{ copy.slotLabel }}</span>
+                      <span>{{ copy.rowIndicator(rowIndex + 1) }}</span>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
-      </section>
-    </template>
-  </AppLayout>
+      </div>
+    </section>
+  </div>
 </template>

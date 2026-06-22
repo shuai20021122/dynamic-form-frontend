@@ -7,6 +7,12 @@ export class ApiError extends Error {
   }
 }
 
+let authExpiredNoticeSent = false;
+
+export function resetAuthExpiredNotice() {
+  authExpiredNoticeSent = false;
+}
+
 export function buildQuery(params = {}) {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -36,6 +42,20 @@ export async function request(url, options = {}) {
   const payload = isJson ? await response.json() : null;
 
   if (!response.ok) {
+    if (response.status === 401 && url !== "/api/auth/logout" && !authExpiredNoticeSent) {
+      authExpiredNoticeSent = true;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("app:auth-expired", {
+            detail: {
+              url,
+              status: response.status,
+              message: (payload && payload.message) || "身份信息已过期，请重新登录",
+            },
+          })
+        );
+      }
+    }
     throw new ApiError((payload && payload.message) || "Request failed", response.status, payload);
   }
 
@@ -53,6 +73,20 @@ export async function downloadFile(url) {
     if (contentType.includes("application/json")) {
       const payload = await response.json();
       message = payload.message || message;
+      if (response.status === 401 && !authExpiredNoticeSent) {
+        authExpiredNoticeSent = true;
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("app:auth-expired", {
+              detail: {
+                url,
+                status: response.status,
+                message,
+              },
+            })
+          );
+        }
+      }
     }
     throw new ApiError(message, response.status);
   }

@@ -1,19 +1,25 @@
 <script setup>
-defineProps({
+import { computed } from "vue";
+
+import { t } from "../stores/uiLanguage.js";
+
+const props = defineProps({
   title: {
     type: String,
-    default: "暂无数据",
+    default: "",
   },
   description: {
     type: String,
     default: "",
   },
 });
+
+const resolvedTitle = computed(() => props.title || t("feedback.noData"));
 </script>
 
 <template>
   <div class="feedback-card">
-    <p class="empty-title">{{ title }}</p>
+    <p class="empty-title">{{ resolvedTitle }}</p>
     <p v-if="description" class="muted-text">{{ description }}</p>
   </div>
 </template>

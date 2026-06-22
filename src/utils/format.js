@@ -1,28 +1,4 @@
-export const ROLE_LABELS = {
-  super_admin: "超级管理员",
-  academic_admin: "教务账号",
-  team_admin: "团队账号",
-  personal: "个人账号",
-  interviewer: "面试官",
-};
-
-export const FORM_STATUS_LABELS = {
-  draft: "草稿",
-  active: "进行中",
-  closed: "已结束",
-};
-
-export const ENTRY_STATUS_LABELS = {
-  empty: "空闲",
-  filled: "已填写",
-  occupied: "已被其他账号占用",
-};
-
-export const REVIEW_RESULT_LABELS = {
-  pending: "待定",
-  pass: "通过",
-  reject: "不通过",
-};
+import { currentUiLanguage, t } from "../stores/uiLanguage.js";
 
 export function formatDateTime(value) {
   if (!value) {
@@ -32,7 +8,7 @@ export function formatDateTime(value) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return date.toLocaleString(currentUiLanguage.value === "en-US" ? "en-US" : "zh-CN", { hour12: false });
 }
 
 export function formatDateOnly(value) {
@@ -43,23 +19,26 @@ export function formatDateOnly(value) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
+  if (currentUiLanguage.value === "en-US") {
+    return date.toLocaleDateString("en-CA");
+  }
   return date.toISOString().slice(0, 10);
 }
 
 export function getRoleLabel(role) {
-  return ROLE_LABELS[role] || role || "-";
+  return t(`role.${role}`) || role || "-";
 }
 
 export function getFormStatusLabel(status) {
-  return FORM_STATUS_LABELS[status] || status || "-";
+  return t(`formStatus.${status}`) || status || "-";
 }
 
 export function getEntryStatusLabel(status) {
-  return ENTRY_STATUS_LABELS[status] || status || "-";
+  return t(`entryStatus.${status}`) || status || "-";
 }
 
 export function getReviewResultLabel(result) {
-  return REVIEW_RESULT_LABELS[result] || result || "-";
+  return t(`review.${result}`) || result || "-";
 }
 
 export function buildValueSummary(values) {

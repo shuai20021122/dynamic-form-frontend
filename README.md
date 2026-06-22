@@ -25,6 +25,7 @@ Vue 3 + Vite 前端仓库，用于逐步替代原 Flask `templates + static` 页
 - `src/api/entries.js`
 - `src/api/documents.js`
 - `src/api/export.js`
+- `src/api/interviewerAccess.js`
 
 所有请求都只使用 `/api/...`，不写死完整后端地址。
 

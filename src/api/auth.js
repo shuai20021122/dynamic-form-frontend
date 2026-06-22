@@ -1,4 +1,4 @@
-import { request } from "./request.js";
+import { request, resetAuthExpiredNotice } from "./request.js";
 
 let currentUserCache = null;
 
@@ -11,10 +11,10 @@ export function clearCachedCurrentUser() {
 }
 
 export function getDefaultLandingPath(role) {
-  if (role === "team_admin" || role === "personal" || role === "interviewer") {
-    return "/forms";
+  if (role === "super_admin") {
+    return "/users";
   }
-  return "/dashboard";
+  return "/forms";
 }
 
 export async function fetchCaptcha() {
@@ -26,6 +26,7 @@ export async function login(payload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  resetAuthExpiredNotice();
   currentUserCache = result?.data?.user || null;
   return result;
 }
@@ -36,6 +37,7 @@ export async function fetchCurrentUser(force = false) {
   }
 
   const result = await request("/api/auth/me");
+  resetAuthExpiredNotice();
   currentUserCache = result?.data?.user || null;
   return currentUserCache;
 }
@@ -44,6 +46,14 @@ export async function logout() {
   const result = await request("/api/auth/logout", {
     method: "POST",
   });
+  resetAuthExpiredNotice();
   currentUserCache = null;
   return result;
+}
+
+export async function changePassword(payload) {
+  return request("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
