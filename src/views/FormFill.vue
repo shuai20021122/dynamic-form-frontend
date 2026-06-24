@@ -220,6 +220,34 @@ function matchesSimpleField(field, aliases = []) {
   return aliases.some((alias) => fieldAliases.includes(normalizeSimpleFieldText(alias)));
 }
 
+function focusSimpleFieldCell(event) {
+  const cell = event?.currentTarget;
+  if (!(cell instanceof HTMLElement)) {
+    return;
+  }
+
+  const activeElement = document.activeElement;
+  if (activeElement && cell.contains(activeElement)) {
+    return;
+  }
+
+  const primaryControl = cell.querySelector("input, textarea");
+  if (primaryControl instanceof HTMLInputElement || primaryControl instanceof HTMLTextAreaElement) {
+    primaryControl.focus();
+    const valueLength = String(primaryControl.value || "").length;
+    if (typeof primaryControl.setSelectionRange === "function") {
+      primaryControl.setSelectionRange(valueLength, valueLength);
+    }
+    return;
+  }
+
+  const selectTrigger = cell.querySelector(".ui-select-trigger");
+  if (selectTrigger instanceof HTMLElement) {
+    selectTrigger.focus();
+    selectTrigger.click();
+  }
+}
+
 function createVirtualSimpleField(fieldKey, label, fieldType = "text") {
   return {
     id: `virtual-${fieldKey}`,
@@ -1490,7 +1518,7 @@ watch(currentUiLanguage, () => {
                     </tr>
                     <tr>
                       <td class="fill-simple-label">Name<br />姓名</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('name'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('name'))"
@@ -1499,7 +1527,7 @@ watch(currentUiLanguage, () => {
                         />
                       </td>
                       <td class="fill-simple-label">Date of Birth<br />出生日期<br />（格式: 日/月/年）</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('birthDate'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('birthDate'))"
@@ -1511,7 +1539,7 @@ watch(currentUiLanguage, () => {
                     </tr>
                     <tr>
                       <td class="fill-simple-label">Gender<br />性别</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('gender'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('gender'))"
@@ -1520,7 +1548,7 @@ watch(currentUiLanguage, () => {
                         />
                       </td>
                       <td class="fill-simple-label">Nationality<br />国籍</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('nationality'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('nationality'))"
@@ -1531,7 +1559,7 @@ watch(currentUiLanguage, () => {
                     </tr>
                     <tr>
                       <td class="fill-simple-label">Organization Name<br />公司名称</td>
-                      <td colspan="2" class="fill-simple-field">
+                      <td colspan="2" class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('organization'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('organization'))"
@@ -1539,7 +1567,7 @@ watch(currentUiLanguage, () => {
                           @input="setSimpleFieldValue(getResolvedSimpleField('organization'), $event.target.value)"
                         />
                       </td>
-                      <td class="fill-simple-field fill-simple-field--stacked">
+                      <td class="fill-simple-field fill-simple-field--stacked" @click="focusSimpleFieldCell">
                         <span class="fill-simple-inline-label">Position<br />职务</span>
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('position'))"
@@ -1555,7 +1583,7 @@ watch(currentUiLanguage, () => {
                     </tr>
                     <tr>
                       <td class="fill-simple-label">Assets<br />总资产</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('assets'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('assets'))"
@@ -1563,7 +1591,7 @@ watch(currentUiLanguage, () => {
                         />
                       </td>
                       <td class="fill-simple-label">Employees<br />员工人数</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('employees'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('employees'))"
@@ -1573,7 +1601,7 @@ watch(currentUiLanguage, () => {
                     </tr>
                     <tr>
                       <td class="fill-simple-label">Revenue<br />企业营收</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('revenue'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('revenue'))"
@@ -1581,7 +1609,7 @@ watch(currentUiLanguage, () => {
                         />
                       </td>
                       <td class="fill-simple-label">Industry<br />公司行业</td>
-                      <td class="fill-simple-field">
+                      <td class="fill-simple-field" @click="focusSimpleFieldCell">
                         <input
                           :value="getSimpleFieldValue(getResolvedSimpleField('industry'))"
                           :type="getSimpleFieldInputType(getResolvedSimpleField('industry'))"
@@ -1601,13 +1629,13 @@ watch(currentUiLanguage, () => {
                       <th class="fill-simple-record-head">担任职务<br /><small>Position/Title</small></th>
                     </tr>
                     <tr v-for="(row, index) in simpleFormWorkRows" :key="`work-${index}`">
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.date" :value="getSimpleFieldValue(row.date)" :type="getSimpleFieldInputType(row.date)" @input="setSimpleFieldValue(row.date, $event.target.value)" />
                       </td>
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.organization" :value="getSimpleFieldValue(row.organization)" :type="getSimpleFieldInputType(row.organization)" @input="setSimpleFieldValue(row.organization, $event.target.value)" />
                       </td>
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.position" :value="getSimpleFieldValue(row.position)" :type="getSimpleFieldInputType(row.position)" @input="setSimpleFieldValue(row.position, $event.target.value)" />
                       </td>
                     </tr>
@@ -1624,16 +1652,16 @@ watch(currentUiLanguage, () => {
                       <th class="fill-simple-record-head">学历/学位<br /><small>Degree Obtained</small></th>
                     </tr>
                     <tr v-for="(row, index) in simpleFormEducationRows" :key="`education-${index}`">
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.date" :value="getSimpleFieldValue(row.date)" :type="getSimpleFieldInputType(row.date)" @input="setSimpleFieldValue(row.date, $event.target.value)" />
                       </td>
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.institution" :value="getSimpleFieldValue(row.institution)" :type="getSimpleFieldInputType(row.institution)" @input="setSimpleFieldValue(row.institution, $event.target.value)" />
                       </td>
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.fieldOfStudy" :value="getSimpleFieldValue(row.fieldOfStudy)" :type="getSimpleFieldInputType(row.fieldOfStudy)" @input="setSimpleFieldValue(row.fieldOfStudy, $event.target.value)" />
                       </td>
-                      <td class="fill-simple-field fill-simple-field--record">
+                      <td class="fill-simple-field fill-simple-field--record" @click="focusSimpleFieldCell">
                         <input v-if="row.degree" :value="getSimpleFieldValue(row.degree)" :type="getSimpleFieldInputType(row.degree)" @input="setSimpleFieldValue(row.degree, $event.target.value)" />
                       </td>
                     </tr>

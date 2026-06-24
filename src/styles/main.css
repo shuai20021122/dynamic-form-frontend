@@ -783,6 +783,7 @@ pre {
 .login-showcase {
   color: #ffffff;
   padding-left: clamp(0px, 2vw, 12px);
+  transform: translateY(-34px);
   animation: loginFloatIn 460ms ease;
 }
 
@@ -818,7 +819,7 @@ pre {
 }
 
 .login-showcase-title {
-  margin: 56px 0 12px;
+  margin: 38px 0 12px;
   color: #ffffff;
   font-size: clamp(52px, 5.4vw, 78px);
   font-weight: 800;
@@ -1245,6 +1246,7 @@ pre {
 
 .btn-primary,
 .primary-button {
+  border-radius: 10px;
   border-color: rgba(102, 159, 255, 0.22);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.02) 36%, rgba(255, 255, 255, 0) 100%),
@@ -2514,6 +2516,15 @@ pre {
 .fill-page {
   display: grid;
   gap: 20px;
+}
+
+.fill-page .btn {
+  border-radius: 8px;
+}
+
+.fill-page .account-menu-trigger,
+.fill-page .topbar-back-link {
+  border-radius: 10px;
 }
 
 .fill-hero {
@@ -4456,7 +4467,7 @@ pre {
 .history-reset-button,
 .history-pager-btn {
   min-height: 48px;
-  border-radius: 16px;
+  border-radius: 10px;
   white-space: nowrap;
 }
 
@@ -4552,7 +4563,7 @@ pre {
   min-height: 46px;
   min-width: 0;
   padding-inline: 8px;
-  border-radius: 16px;
+  border-radius: 10px;
   white-space: nowrap;
   width: 100%;
   margin: 0;
@@ -5173,12 +5184,12 @@ pre {
 @keyframes loginFloatIn {
   from {
     opacity: 0;
-    transform: translate3d(-20px, 16px, 0);
+    filter: blur(6px);
   }
 
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    filter: blur(0);
   }
 }
 
@@ -5337,6 +5348,7 @@ pre {
   .login-showcase {
     padding-left: 0;
     text-align: center;
+    transform: none;
   }
 
   .login-showcase-logo,
