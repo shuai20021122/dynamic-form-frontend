@@ -90,19 +90,30 @@ const router = createRouter({
   routes,
 });
 
+function buildLoginRedirectTarget(to, error) {
+  const query = {};
+
+  if (to.fullPath !== "/forms") {
+    query.redirect = to.fullPath;
+  }
+
+  if (!(error instanceof ApiError) || error.status !== 401) {
+    query.error = "server";
+  }
+
+  return {
+    path: "/login",
+    query: Object.keys(query).length ? query : undefined,
+  };
+}
+
 router.beforeEach(async (to) => {
   if (to.meta.requiresAuth) {
     try {
       await fetchCurrentUser();
     } catch (error) {
       clearCachedCurrentUser();
-      if (error instanceof ApiError && error.status === 401) {
-        return {
-          path: "/login",
-          query: to.fullPath !== "/forms" ? { redirect: to.fullPath } : undefined,
-        };
-      }
-      throw error;
+      return buildLoginRedirectTarget(to, error);
     }
   }
 
@@ -115,7 +126,7 @@ router.beforeEach(async (to) => {
       if (error instanceof ApiError && error.status === 401) {
         return true;
       }
-      throw error;
+      return true;
     }
   }
 

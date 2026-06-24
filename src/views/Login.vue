@@ -31,6 +31,9 @@ const passwordRule = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d\s])\S{6,18}$/;
 const captchaRule = /^\d+$/;
 
 const passwordInputType = computed(() => (showPassword.value ? "text" : "password"));
+const serverErrorMessage = computed(() =>
+  route.query.error === "server" ? "服务暂时不可用，请稍后重试或检查后端服务。" : ""
+);
 
 function clearCredentialErrors() {
   credentialError.value = false;
@@ -112,6 +115,10 @@ function resolveLoginError(error) {
   const message = String(error?.message || "");
   const normalizedMessage = message.toLowerCase();
 
+  if (error?.status >= 500) {
+    return "后端服务当前不可用，请先确认后端已启动，或检查 VITE_API_PROXY_TARGET 是否指向正确地址。";
+  }
+
   if (normalizedMessage.includes("captcha") || message.includes("验证码")) {
     fieldErrors.captcha = t("login.captchaIncorrect");
     return "";
@@ -147,7 +154,10 @@ async function loadCaptcha() {
     captchaQuestion.value = result?.data?.question || t("login.refreshCaptcha");
   } catch (error) {
     captchaQuestion.value = t("login.captchaFailed");
-    errorMessage.value = error.message || t("login.captchaFailed");
+    errorMessage.value =
+      error?.status >= 500
+        ? "验证码加载失败：后端服务未连接，请检查后端是否启动。"
+        : error.message || t("login.captchaFailed");
   } finally {
     loadingCaptcha.value = false;
   }
@@ -296,6 +306,7 @@ onMounted(loadCaptcha);
           <p v-if="fieldErrors.captcha" class="login-field-error" role="alert">{{ fieldErrors.captcha }}</p>
         </div>
 
+        <p v-if="serverErrorMessage" class="error-alert login-error-alert" role="alert">{{ serverErrorMessage }}</p>
         <p v-if="errorMessage" class="error-alert login-error-alert" role="alert">{{ errorMessage }}</p>
 
         <button class="btn btn-primary btn-block login-submit login-submit--boss" type="submit" :disabled="submitting">

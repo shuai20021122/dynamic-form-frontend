@@ -21,6 +21,24 @@ export function previewDocument(documentId) {
   return request(`/api/documents/${documentId}/preview`);
 }
 
+export function createOnlineSummary(payload) {
+  return request("/api/documents/online-summary", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getOnlineSummaryDetail(documentId) {
+  return request(`/api/documents/${documentId}/online-summary`);
+}
+
+export function updateOnlineSummary(documentId, payload) {
+  return request(`/api/documents/${documentId}/online-summary`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getBilingualEditor(documentId) {
   return request(`/api/documents/${documentId}/bilingual-editor`);
 }

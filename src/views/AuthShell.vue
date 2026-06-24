@@ -18,7 +18,18 @@ const sessionExpiredOpen = ref(false);
 const pageTitle = computed(() => getRouteTitle(route.name));
 
 async function loadCurrentUser() {
-  currentUser.value = await fetchCurrentUser();
+  try {
+    currentUser.value = await fetchCurrentUser();
+  } catch (error) {
+    clearCachedCurrentUser();
+    currentUser.value = null;
+    if (route.path !== "/login") {
+      await router.replace({
+        path: "/login",
+        query: { error: "server" },
+      });
+    }
+  }
 }
 
 async function handleLogout() {

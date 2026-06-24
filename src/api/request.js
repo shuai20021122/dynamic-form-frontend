@@ -24,6 +24,17 @@ export function buildQuery(params = {}) {
   return query ? `?${query}` : "";
 }
 
+function getDefaultErrorMessage(status, url) {
+  if (status >= 500) {
+    if (url.startsWith("/api/auth/")) {
+      return "后端认证服务不可用，请检查后端是否启动或代理地址是否正确。";
+    }
+    return "后端服务暂时不可用，请稍后重试。";
+  }
+
+  return "Request failed";
+}
+
 export async function request(url, options = {}) {
   const isFormData = options.body instanceof FormData;
   const response = await fetch(url, {
@@ -56,7 +67,7 @@ export async function request(url, options = {}) {
         );
       }
     }
-    throw new ApiError((payload && payload.message) || "Request failed", response.status, payload);
+    throw new ApiError((payload && payload.message) || getDefaultErrorMessage(response.status, url), response.status, payload);
   }
 
   return payload;

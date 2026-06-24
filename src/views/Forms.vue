@@ -239,13 +239,19 @@ function handleDelete(formId) {
   openActionDialog(formId, "delete");
 }
 
+function handleInterviewerAccessGranted() {
+  loadPage();
+}
+
 onMounted(() => {
   loadPage();
   document.addEventListener("click", closeTitleBubble);
+  window.addEventListener("app:interviewer-access-granted", handleInterviewerAccessGranted);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("click", closeTitleBubble);
+  window.removeEventListener("app:interviewer-access-granted", handleInterviewerAccessGranted);
   resetDialogMotion(actionDialog);
 });
 

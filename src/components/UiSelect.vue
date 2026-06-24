@@ -23,7 +23,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "option-action"]);
 
 const rootRef = ref(null);
 const open = ref(false);
@@ -43,8 +43,15 @@ function toggle() {
 }
 
 function selectOption(option) {
+  if (option.disabled) {
+    return;
+  }
   emit("update:modelValue", option.value);
   close();
+}
+
+function triggerOptionAction(option) {
+  emit("option-action", option);
 }
 
 function handleDocumentPointerDown(event) {
@@ -71,16 +78,25 @@ onBeforeUnmount(() => {
 
     <transition name="ui-select-dropdown">
       <div v-if="open" class="ui-select-dropdown">
-        <button
+        <div
           v-for="option in options"
           :key="`${option.label}-${option.value}`"
           class="ui-select-option"
-          :class="{ 'is-selected': String(option.value) === String(modelValue) }"
-          type="button"
-          @click="selectOption(option)"
+          :class="{ 'is-selected': String(option.value) === String(modelValue), 'is-disabled': !!option.disabled, 'has-action': !!option.actionLabel }"
         >
-          {{ option.label }}
-        </button>
+          <button class="ui-select-option-main" type="button" :disabled="!!option.disabled" @click="selectOption(option)">
+            {{ option.label }}
+          </button>
+          <button
+            v-if="option.actionLabel"
+            class="ui-select-option-action"
+            type="button"
+            :disabled="!!option.actionDisabled"
+            @click="triggerOptionAction(option)"
+          >
+            {{ option.actionLabel }}
+          </button>
+        </div>
       </div>
     </transition>
   </div>

@@ -42,6 +42,7 @@ const passwordSubmitting = ref(false);
 const passwordErrorMessage = ref("");
 const skipPasswordBlurValidation = ref(false);
 const academicAccessId = ref("");
+const showAccessId = ref(false);
 const interviewerAccessLoading = ref(false);
 const interviewerAccessSubmitting = ref(false);
 const interviewerAccessCode = ref("");
@@ -120,6 +121,13 @@ const showFormsBackButton = computed(() => ["form-fill", "form-designer"].includ
 const showLanguageSwitch = computed(() => props.currentUser?.role === "interviewer");
 const languageButtonLabel = computed(() => getUiLanguageLabel(currentUiLanguage.value));
 const showAcademicAccessId = computed(() => props.currentUser?.role === "academic_admin" && !!academicAccessId.value);
+const displayedAcademicAccessId = computed(() => {
+  if (!showAcademicAccessId.value) {
+    return "";
+  }
+
+  return showAccessId.value ? academicAccessId.value : "*".repeat(String(academicAccessId.value).length);
+});
 
 async function loadAcademicAccessId() {
   if (props.currentUser?.role !== "academic_admin") {
@@ -140,6 +148,10 @@ function resetInterviewerAccessDialog() {
   interviewerAccessCode.value = "";
   interviewerAccessError.value = "";
   interviewerAccessSubmitting.value = false;
+}
+
+function toggleAccessIdVisibility() {
+  showAccessId.value = !showAccessId.value;
 }
 
 function openInterviewerAccessGate() {
@@ -206,6 +218,9 @@ async function submitInterviewerAccess() {
 
     resetInterviewerAccessDialog();
     closeInterviewerAccessGate();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("app:interviewer-access-granted"));
+    }
   } catch (error) {
     interviewerAccessError.value = error.message || "教务ID错误或已失效，请重新输入。";
   } finally {
@@ -474,13 +489,22 @@ onBeforeUnmount(() => {
               <span class="account-menu-copy">
                 <span class="account-menu-name">{{ currentUser.real_name || currentUser.username }}</span>
                 <span class="account-menu-id">{{ currentUser.username }}</span>
-                <span v-if="showAcademicAccessId" class="account-menu-academic-id">教务ID：{{ academicAccessId }}</span>
+                <span v-if="showAcademicAccessId" class="account-menu-academic-id">每日访问ID：{{ displayedAcademicAccessId }}</span>
               </span>
             </button>
 
             <div v-if="accountMenuOpen" class="account-menu-popover" role="menu">
               <button class="account-menu-item" type="button" role="menuitem" @click="handleChangePasswordClick">{{ t("common.changePassword") }}</button>
               <button class="account-menu-item account-menu-item--danger" type="button" role="menuitem" @click="handleLogoutClick">{{ t("common.logout") }}</button>
+              <button
+                v-if="showAcademicAccessId"
+                class="account-menu-item account-menu-item--secondary"
+                type="button"
+                role="menuitem"
+                @click="toggleAccessIdVisibility"
+              >
+                {{ showAccessId ? "隐藏ID" : "显示ID" }}
+              </button>
             </div>
           </div>
         </div>

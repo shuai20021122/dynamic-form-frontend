@@ -6,6 +6,7 @@ import bossKnowLogo from "../assets/boss-know-logo.png";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingBlock from "../components/LoadingBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
+import UiSelect from "../components/UiSelect.vue";
 import { fetchCurrentUser } from "../api/auth.js";
 import { getForm, getSimpleDesigner, publishForm, saveSimpleDesigner } from "../api/forms.js";
 import { getCachedResource, setCachedResource } from "../stores/resourceCache.js";
@@ -23,14 +24,86 @@ const saving = ref(false);
 const publishing = ref(false);
 const errorMessage = ref("");
 const slots = ref([]);
+const disabledSlots = ref([]);
 const designerCacheKey = computed(() => `forms:designer:${formId.value}:${currentUiLanguage.value}`);
+
+function formatTimeValue(totalMinutes) {
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+const baseTimeSlotOptions = Array.from({ length: 32 }, (_, index) => {
+  const startMinutes = 5 * 60 + index * 30;
+  const endMinutes = startMinutes + 30;
+  const label = `${formatTimeValue(startMinutes)} - ${formatTimeValue(endMinutes)}`;
+  return { value: label, label };
+});
+
+const timeSlotOptions = computed(() => {
+  const knownValues = new Set(baseTimeSlotOptions.map((option) => option.value));
+  const customOptions = slots.value
+    .map((slot) => String(slot || "").trim())
+    .filter((slot) => slot && !knownValues.has(slot))
+    .map((slot) => ({ value: slot, label: slot }));
+
+  return [...baseTimeSlotOptions, ...customOptions];
+});
+
+function getAvailableTimeSlotOptions(rowIndex) {
+  const currentValue = String(slots.value[rowIndex] || "").trim();
+  const selectedValues = new Set(
+    slots.value
+      .map((slot, index) => (index === rowIndex ? "" : String(slot || "").trim()))
+      .filter(Boolean)
+  );
+
+  return timeSlotOptions.value.filter((option) => {
+    const value = String(option.value);
+    if (value === currentValue) {
+      return true;
+    }
+    if (disabledSlots.value.includes(value)) {
+      return false;
+    }
+    return !selectedValues.has(value);
+  });
+}
+
+function isSlotDisabled(slot) {
+  return disabledSlots.value.includes(String(slot || "").trim());
+}
+
+function toggleSlotDisabled(slot) {
+  const value = String(slot || "").trim();
+  if (!value) {
+    return;
+  }
+
+  if (disabledSlots.value.includes(value)) {
+    disabledSlots.value = disabledSlots.value.filter((item) => item !== value);
+    return;
+  }
+
+  disabledSlots.value = [...disabledSlots.value, value];
+}
 
 const fixedHeaders = computed(() => {
   if (currentUiLanguage.value === "en-US") {
-    return ["Name", "Gender", "Company Name", "Position", "Format", "Language", "Status"];
+    return [
+      "Name",
+      "Gender",
+      "Company Name (CN)",
+      "Company Name (EN)",
+      "Listed Company",
+      "Position",
+      "Format",
+      "Language",
+      "Admission Status",
+    ];
   }
 
-  return ["姓名", "性别", "公司名称", "职务", "线上/现场", "语言", "状态"];
+  return ["姓名", "性别", "公司名称（中文）", "公司名称（英文）", "公司是否上市", "职务", "线上/现场", "语言", "录取状态"];
 });
 
 const copy = computed(() => {
@@ -94,7 +167,7 @@ const copy = computed(() => {
     rowIndicator: (index) => `第 ${index} 行`,
     loadFailed: "加载表单设计失败",
     saveFailed: "保存设计失败",
-    publishFailed: "发布失败",
+    publishFailed: "发布表单失败",
   };
 });
 
@@ -103,12 +176,17 @@ const slotCount = computed(() => slots.value.length);
 const canRemoveSlot = computed(() => slots.value.length > 2);
 
 function ensureMinimum() {
-  if (!slots.value.length) slots.value = ["", ""];
+  if (!slots.value.length) {
+    slots.value = baseTimeSlotOptions.slice(0, 2).map((option) => option.value);
+  }
   while (slots.value.length < 2) slots.value.push("");
+  disabledSlots.value = disabledSlots.value.filter((slot) => slots.value.includes(slot));
 }
 
 function addSlot() {
-  slots.value.push("");
+  const selected = new Set(slots.value.map((slot) => String(slot || "").trim()).filter(Boolean));
+  const nextOption = baseTimeSlotOptions.find((option) => !selected.has(option.value));
+  slots.value.push(nextOption?.value || "");
 }
 
 function removeSlot() {
@@ -134,6 +212,7 @@ async function loadPage() {
     form.value = cached.form || form.value;
     design.value = cached.design || design.value;
     slots.value = [...(cached.slots || slots.value)];
+    disabledSlots.value = [...(cached.disabledSlots || disabledSlots.value)];
     loading.value = false;
   } else {
     loading.value = true;
@@ -147,12 +226,14 @@ async function loadPage() {
     form.value = formResult?.data?.form || null;
     design.value = designResult?.data || {};
     slots.value = [...(design.value?.slots || [])];
+    disabledSlots.value = [...(design.value?.disabled_slots || [])];
     ensureMinimum();
     setCachedResource(designerCacheKey.value, {
       currentUser: me,
       form: form.value,
       design: design.value,
       slots: slots.value,
+      disabledSlots: disabledSlots.value,
     });
   } catch (error) {
     errorMessage.value = error.message || copy.value.loadFailed;
@@ -166,10 +247,12 @@ async function handleSave() {
   errorMessage.value = "";
 
   try {
+    const normalizedSlots = normalize(slots.value);
     await saveSimpleDesigner(formId.value, {
       headers: fixedHeaders.value,
       required_headers: [],
-      slots: normalize(slots.value),
+      slots: normalizedSlots,
+      disabled_slots: normalize(disabledSlots.value).filter((slot) => normalizedSlots.includes(slot)),
     });
     await loadPage();
   } catch (error) {
@@ -284,10 +367,11 @@ onMounted(loadPage);
                   <td class="designer-slot-cell">
                     <div class="designer-slot-field">
                       <span class="designer-cell-label">{{ copy.slotLabel }}</span>
-                      <input
+                      <UiSelect
                         v-model="slots[rowIndex]"
-                        class="designer-input"
-                        type="text"
+                        class="designer-slot-select"
+                        :options="getAvailableTimeSlotOptions(rowIndex)"
+                        :disabled="saving || publishing"
                         :placeholder="copy.slotPlaceholder(rowIndex + 1)"
                       />
                     </div>
