@@ -14,8 +14,27 @@ const currentUser = ref(null);
 const sessionExpiredDialog = ref(null);
 const sessionExpiredMessage = ref("身份信息已过期，请重新登录。");
 const sessionExpiredOpen = ref(false);
+const currentOperatorPromptPrefix = "forms:current-operator-prompt:";
 
 const pageTitle = computed(() => getRouteTitle(route.name));
+
+function clearCurrentOperatorPromptSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const keysToRemove = [];
+  for (let index = 0; index < window.sessionStorage.length; index += 1) {
+    const key = window.sessionStorage.key(index);
+    if (key && key.startsWith(currentOperatorPromptPrefix)) {
+      keysToRemove.push(key);
+    }
+  }
+
+  keysToRemove.forEach((key) => {
+    window.sessionStorage.removeItem(key);
+  });
+}
 
 async function loadCurrentUser() {
   try {
@@ -36,6 +55,7 @@ async function handleLogout() {
   try {
     await logout();
   } finally {
+    clearCurrentOperatorPromptSession();
     currentUser.value = null;
     await router.push("/login");
   }
@@ -43,6 +63,7 @@ async function handleLogout() {
 
 function handleAuthExpired(event) {
   clearCachedCurrentUser();
+  clearCurrentOperatorPromptSession();
   currentUser.value = null;
   sessionExpiredMessage.value = event?.detail?.message || t("layout.sessionExpiredBody");
 
@@ -64,6 +85,17 @@ function handleAuthExpired(event) {
   });
 }
 
+function handleCurrentUserUpdated(event) {
+  if (!event?.detail?.user) {
+    return;
+  }
+
+  currentUser.value = {
+    ...(currentUser.value || {}),
+    ...event.detail.user,
+  };
+}
+
 async function acknowledgeSessionExpired() {
   sessionExpiredOpen.value = false;
   closeDialogWithAnimation(sessionExpiredDialog, {
@@ -78,11 +110,13 @@ onMounted(loadCurrentUser);
 
 onMounted(() => {
   window.addEventListener("app:auth-expired", handleAuthExpired);
+  window.addEventListener("app:current-user-updated", handleCurrentUserUpdated);
 });
 
 onBeforeUnmount(() => {
   resetDialogMotion(sessionExpiredDialog);
   window.removeEventListener("app:auth-expired", handleAuthExpired);
+  window.removeEventListener("app:current-user-updated", handleCurrentUserUpdated);
 });
 </script>
 

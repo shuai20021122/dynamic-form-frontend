@@ -32,6 +32,10 @@ function getDefaultErrorMessage(status, url) {
     return "后端服务暂时不可用，请稍后重试。";
   }
 
+  if (status === 403) {
+    return "当前账号暂无权限执行该操作。";
+  }
+
   return "Request failed";
 }
 
@@ -61,7 +65,7 @@ export async function request(url, options = {}) {
             detail: {
               url,
               status: response.status,
-              message: (payload && payload.message) || "身份信息已过期，请重新登录",
+              message: (payload && payload.message) || "身份信息已过期，请重新登录。",
             },
           })
         );

@@ -1,8 +1,9 @@
-<script setup>
-import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+﻿<script setup>
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import bossKnowLogo from "../assets/boss-know-logo.png";
+import CodeFlowBackdrop from "../components/CodeFlowBackdrop.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingBlock from "../components/LoadingBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
@@ -14,7 +15,9 @@ import { currentUiLanguage } from "../stores/uiLanguage.js";
 import { formatDateOnly, getFormStatusLabel } from "../utils/format.js";
 
 const route = useRoute();
+const router = useRouter();
 const formId = computed(() => route.params.id);
+const designerToastStorageKey = "forms:designer:toast";
 
 const currentUser = ref(null);
 const form = ref(null);
@@ -24,8 +27,20 @@ const saving = ref(false);
 const publishing = ref(false);
 const errorMessage = ref("");
 const slots = ref([]);
-const disabledSlots = ref([]);
+const toastMessage = ref("");
 const designerCacheKey = computed(() => `forms:designer:${formId.value}:${currentUiLanguage.value}`);
+let toastTimer = null;
+
+function showToast(message) {
+  toastMessage.value = message;
+  if (toastTimer) {
+    window.clearTimeout(toastTimer);
+  }
+  toastTimer = window.setTimeout(() => {
+    toastMessage.value = "";
+    toastTimer = null;
+  }, 2200);
+}
 
 function formatTimeValue(totalMinutes) {
   const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
@@ -43,49 +58,114 @@ const baseTimeSlotOptions = Array.from({ length: 32 }, (_, index) => {
 const timeSlotOptions = computed(() => {
   const knownValues = new Set(baseTimeSlotOptions.map((option) => option.value));
   const customOptions = slots.value
-    .map((slot) => String(slot || "").trim())
+    .map((slot) => getSlotTitle(slot))
     .filter((slot) => slot && !knownValues.has(slot))
     .map((slot) => ({ value: slot, label: slot }));
 
   return [...baseTimeSlotOptions, ...customOptions];
 });
 
+function normalizeSlotItem(slot) {
+  const normalizeIsActive = (value) => {
+    if (value === false || value === 0) return false;
+    const normalizedValue = String(value ?? "").trim().toLowerCase();
+    if (normalizedValue === "false" || normalizedValue === "0" || normalizedValue === "disabled") {
+      return false;
+    }
+    return true;
+  };
+
+  if (typeof slot === "string") {
+    return {
+      title: String(slot || "").trim(),
+      is_active: true,
+    };
+  }
+
+  return {
+    ...(slot || {}),
+    title: String(slot?.title || slot?.label || slot?.value || "").trim(),
+    is_active: normalizeIsActive(slot?.is_active),
+  };
+}
+
+function normalizeSlotMatchKey(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[–—]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, "");
+}
+
+function getSlotTitle(slot) {
+  return normalizeSlotItem(slot).title;
+}
+
+function isSlotActive(slot) {
+  return normalizeSlotItem(slot).is_active !== false;
+}
+
+function normalizeSlots(slotsList = [], disabledSlotTitles = []) {
+  const disabledSet = new Set((disabledSlotTitles || []).map((slot) => String(slot || "").trim()).filter(Boolean));
+  return (slotsList || []).map((slot) => {
+    const normalizedSlot = normalizeSlotItem(slot);
+    if (disabledSet.has(normalizedSlot.title)) {
+      return {
+        ...normalizedSlot,
+        is_active: false,
+      };
+    }
+    return normalizedSlot;
+  });
+}
+
+function getDesignerSlotDetailList(data = {}) {
+  if (Array.isArray(data?.slot_details) && data.slot_details.length) {
+    return data.slot_details;
+  }
+
+  return normalizeSlots(data?.slots || [], data?.disabled_slots || []);
+}
+
+function buildSlotsFromDesignerData(data = {}) {
+  return getDesignerSlotDetailList(data)
+    .map((slot) => normalizeSlotItem(slot))
+    .filter((slot) => slot.title);
+}
+
 function getAvailableTimeSlotOptions(rowIndex) {
-  const currentValue = String(slots.value[rowIndex] || "").trim();
+  const currentValue = getSlotTitle(slots.value[rowIndex]);
   const selectedValues = new Set(
     slots.value
-      .map((slot, index) => (index === rowIndex ? "" : String(slot || "").trim()))
+      .map((slot, index) => (index === rowIndex ? "" : normalizeSlotMatchKey(getSlotTitle(slot))))
       .filter(Boolean)
   );
 
   return timeSlotOptions.value.filter((option) => {
     const value = String(option.value);
-    if (value === currentValue) {
+    if (normalizeSlotMatchKey(value) === normalizeSlotMatchKey(currentValue)) {
       return true;
     }
-    if (disabledSlots.value.includes(value)) {
-      return false;
-    }
-    return !selectedValues.has(value);
+    return !selectedValues.has(normalizeSlotMatchKey(value));
   });
 }
 
 function isSlotDisabled(slot) {
-  return disabledSlots.value.includes(String(slot || "").trim());
+  return !isSlotActive(slot);
 }
 
-function toggleSlotDisabled(slot) {
-  const value = String(slot || "").trim();
-  if (!value) {
+function toggleSlotDisabled(rowIndex) {
+  const currentSlot = normalizeSlotItem(slots.value[rowIndex]);
+  if (!currentSlot.title) {
     return;
   }
 
-  if (disabledSlots.value.includes(value)) {
-    disabledSlots.value = disabledSlots.value.filter((item) => item !== value);
-    return;
-  }
-
-  disabledSlots.value = [...disabledSlots.value, value];
+  const nextSlots = [...slots.value];
+  nextSlots[rowIndex] = {
+    ...currentSlot,
+    is_active: !currentSlot.is_active,
+  };
+  slots.value = nextSlots;
 }
 
 const fixedHeaders = computed(() => {
@@ -99,18 +179,17 @@ const fixedHeaders = computed(() => {
       "Position",
       "Format",
       "Language",
-      "Admission Status",
     ];
   }
 
-  return ["姓名", "性别", "公司名称（中文）", "公司名称（英文）", "公司是否上市", "职务", "线上/现场", "语言", "录取状态"];
+  return ["姓名", "性别", "公司名称（中文）", "公司名称（英文）", "公司是否上市", "职务", "线上/现场", "语言"];
 });
 
 const copy = computed(() => {
   if (currentUiLanguage.value === "en-US") {
     return {
       loading: "Loading designer...",
-      heroSuffix: "Form Designer",
+      heroSuffix: "Form Editor",
       heroNote:
         "Header fields are fixed for all accounts. You only need to maintain the time slots in the first column.",
       date: "Date",
@@ -122,7 +201,7 @@ const copy = computed(() => {
       addRow: "Add Row",
       removeRow: "Remove Row",
       preview: "Preview Fill Page",
-      save: "Save Design",
+      save: "Save Form",
       saving: "Saving...",
       publish: "Publish Form",
       publishing: "Publishing...",
@@ -130,7 +209,10 @@ const copy = computed(() => {
       tableNote: "The top header row is fixed. Only the first-column time slots can be modified.",
       time: "Time",
       actions: "Actions",
+      slotToggle: "Disable / Enable",
       slotLabel: "Time Slot",
+      disableSlot: "Disable",
+      enableSlot: "Enable",
       slotPlaceholder: (index) => `Time Slot ${index}`,
       emptyCell: "Reserved Cell",
       rowIndicator: (index) => `Row ${index}`,
@@ -142,7 +224,7 @@ const copy = computed(() => {
 
   return {
     loading: "正在加载表单设计...",
-    heroSuffix: "表格设计界面",
+    heroSuffix: "表单编辑",
     heroNote: "顶部表头字段固定不变，您只需要维护第一列的时间段。中间单元格无需填写，会保留给填写账号后续使用。",
     date: "日期",
     status: "状态",
@@ -153,7 +235,7 @@ const copy = computed(() => {
     addRow: "新增行",
     removeRow: "删除行",
     preview: "预览填写页",
-    save: "保存设计",
+    save: "保存表单",
     saving: "保存中...",
     publish: "发布表单",
     publishing: "发布中...",
@@ -161,7 +243,10 @@ const copy = computed(() => {
     tableNote: "顶部表头固定，只有第一列时间段支持修改。",
     time: "时间",
     actions: "操作",
+    slotToggle: "时间段禁用启用",
     slotLabel: "时间段",
+    disableSlot: "禁用",
+    enableSlot: "启用",
     slotPlaceholder: (index) => `时间段 ${index}`,
     emptyCell: "预留单元格",
     rowIndicator: (index) => `第 ${index} 行`,
@@ -174,19 +259,44 @@ const copy = computed(() => {
 const headerCount = computed(() => fixedHeaders.value.length);
 const slotCount = computed(() => slots.value.length);
 const canRemoveSlot = computed(() => slots.value.length > 2);
+const canPublish = computed(() => form.value?.status !== "active");
 
 function ensureMinimum() {
   if (!slots.value.length) {
-    slots.value = baseTimeSlotOptions.slice(0, 2).map((option) => option.value);
+    slots.value = baseTimeSlotOptions.slice(0, 2).map((option) => ({
+      title: option.value,
+      is_active: true,
+    }));
   }
-  while (slots.value.length < 2) slots.value.push("");
-  disabledSlots.value = disabledSlots.value.filter((slot) => slots.value.includes(slot));
+  slots.value = slots.value.map((slot) => normalizeSlotItem(slot));
+  while (slots.value.length < 2) {
+    slots.value.push({
+      title: "",
+      is_active: true,
+    });
+  }
 }
 
 function addSlot() {
-  const selected = new Set(slots.value.map((slot) => String(slot || "").trim()).filter(Boolean));
+  const normalizedSlots = slots.value.map((slot) => getSlotTitle(slot));
+  const lastSelectedSlot = [...normalizedSlots].reverse().find(Boolean) || "";
+  const orderedValues = timeSlotOptions.value.map((option) => String(option.value || "").trim()).filter(Boolean);
+  const lastSelectedIndex = orderedValues.indexOf(lastSelectedSlot);
+
+  if (lastSelectedIndex >= 0) {
+    slots.value.push({
+      title: orderedValues[lastSelectedIndex + 1] || "",
+      is_active: true,
+    });
+    return;
+  }
+
+  const selected = new Set(normalizedSlots.filter(Boolean));
   const nextOption = baseTimeSlotOptions.find((option) => !selected.has(option.value));
-  slots.value.push(nextOption?.value || "");
+  slots.value.push({
+    title: nextOption?.value || "",
+    is_active: true,
+  });
 }
 
 function removeSlot() {
@@ -195,8 +305,26 @@ function removeSlot() {
   ensureMinimum();
 }
 
-function normalize(items) {
-  return items.map((item) => item.trim()).filter(Boolean);
+function handleSlotChange(rowIndex, value) {
+  const nextSlots = [...slots.value];
+  nextSlots[rowIndex] = {
+    ...normalizeSlotItem(nextSlots[rowIndex]),
+    title: String(value || "").trim(),
+  };
+
+  const orderedValues = timeSlotOptions.value.map((option) => String(option.value || "").trim()).filter(Boolean);
+  const selectedIndex = orderedValues.indexOf(String(value || "").trim());
+
+  if (selectedIndex >= 0) {
+    for (let index = rowIndex + 1; index < nextSlots.length; index += 1) {
+      nextSlots[index] = {
+        ...normalizeSlotItem(nextSlots[index]),
+        title: orderedValues[selectedIndex + (index - rowIndex)] || "",
+      };
+    }
+  }
+
+  slots.value = nextSlots;
 }
 
 function getStatusTone(status) {
@@ -205,14 +333,54 @@ function getStatusTone(status) {
   return "neutral";
 }
 
+function buildDesignerPayload() {
+  const normalizedSlots = slots.value
+    .map((slot) => normalizeSlotItem(slot))
+    .filter((slot) => slot.title);
+  return {
+    headers: fixedHeaders.value,
+    required_headers: [],
+    slots: normalizedSlots.map((slot) => ({
+      title: slot.title,
+      is_active: slot.is_active !== false,
+    })),
+  };
+}
+
+function syncDesignerState(payload, overrides = {}) {
+  const normalizedSlotDetails = Array.isArray(payload?.slot_details)
+    ? payload.slot_details
+    : Array.isArray(payload?.slots)
+      ? payload.slots
+      : [];
+  slots.value = normalizedSlotDetails.map((slot) => normalizeSlotItem(slot));
+  design.value = {
+    ...(design.value || {}),
+    ...(payload || {}),
+  };
+
+  if (overrides.formStatus && form.value) {
+    form.value = {
+      ...form.value,
+      status: overrides.formStatus,
+    };
+  }
+
+  setCachedResource(designerCacheKey.value, {
+    currentUser: currentUser.value,
+    form: form.value,
+    design: design.value,
+    slots: slots.value,
+  });
+}
+
 async function loadPage() {
   const cached = getCachedResource(designerCacheKey.value);
   if (cached) {
     currentUser.value = cached.currentUser || currentUser.value;
     form.value = cached.form || form.value;
     design.value = cached.design || design.value;
-    slots.value = [...(cached.slots || slots.value)];
-    disabledSlots.value = [...(cached.disabledSlots || disabledSlots.value)];
+    slots.value = (cached.slots || slots.value).map((slot) => normalizeSlotItem(slot));
     loading.value = false;
   } else {
     loading.value = true;
@@ -225,15 +393,13 @@ async function loadPage() {
     currentUser.value = me;
     form.value = formResult?.data?.form || null;
     design.value = designResult?.data || {};
-    slots.value = [...(design.value?.slots || [])];
-    disabledSlots.value = [...(design.value?.disabled_slots || [])];
+    slots.value = buildSlotsFromDesignerData(design.value);
     ensureMinimum();
     setCachedResource(designerCacheKey.value, {
       currentUser: me,
       form: form.value,
       design: design.value,
       slots: slots.value,
-      disabledSlots: disabledSlots.value,
     });
   } catch (error) {
     errorMessage.value = error.message || copy.value.loadFailed;
@@ -247,14 +413,10 @@ async function handleSave() {
   errorMessage.value = "";
 
   try {
-    const normalizedSlots = normalize(slots.value);
-    await saveSimpleDesigner(formId.value, {
-      headers: fixedHeaders.value,
-      required_headers: [],
-      slots: normalizedSlots,
-      disabled_slots: normalize(disabledSlots.value).filter((slot) => normalizedSlots.includes(slot)),
-    });
-    await loadPage();
+    const payload = buildDesignerPayload();
+    await saveSimpleDesigner(formId.value, payload);
+    syncDesignerState(payload);
+    showToast(currentUiLanguage.value === "en-US" ? "Form saved successfully" : "保存成功");
   } catch (error) {
     errorMessage.value = error.message || copy.value.saveFailed;
   } finally {
@@ -267,8 +429,17 @@ async function handlePublish() {
   errorMessage.value = "";
 
   try {
+    const payload = buildDesignerPayload();
+    await saveSimpleDesigner(formId.value, payload);
     await publishForm(formId.value);
-    await loadPage();
+    syncDesignerState(payload, { formStatus: "active" });
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(
+        designerToastStorageKey,
+        currentUiLanguage.value === "en-US" ? "Form published successfully" : "发布成功"
+      );
+    }
+    await router.push("/forms");
   } catch (error) {
     errorMessage.value = error.message || copy.value.publishFailed;
   } finally {
@@ -277,14 +448,22 @@ async function handlePublish() {
 }
 
 onMounted(loadPage);
+onBeforeUnmount(() => {
+  if (toastTimer) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+});
 </script>
 
 <template>
   <ErrorAlert :message="errorMessage" />
+  <div v-if="toastMessage" class="light-toast" role="status" aria-live="polite">{{ toastMessage }}</div>
   <LoadingBlock v-if="loading" :label="copy.loading" />
 
   <div v-else-if="form" class="designer-page">
     <section class="designer-hero panel">
+      <CodeFlowBackdrop variant="banner" />
       <div class="designer-hero-body">
         <img class="designer-hero-logo" :src="bossKnowLogo" alt="BOSS KNOW" />
 
@@ -330,11 +509,10 @@ onMounted(loadPage);
         <div class="designer-toolbar">
           <button class="btn btn-secondary" type="button" @click="addSlot">{{ copy.addRow }}</button>
           <button class="btn btn-secondary" type="button" :disabled="!canRemoveSlot" @click="removeSlot">{{ copy.removeRow }}</button>
-          <RouterLink class="btn btn-secondary" :to="`/forms/${form.id}/fill`">{{ copy.preview }}</RouterLink>
-          <button class="btn btn-primary" type="button" :disabled="saving" @click="handleSave">
+          <button class="btn btn-secondary" type="button" :disabled="saving" @click="handleSave">
             {{ saving ? copy.saving : copy.save }}
           </button>
-          <button class="btn btn-secondary" type="button" :disabled="publishing" @click="handlePublish">
+          <button v-if="canPublish" class="btn btn-primary" type="button" :disabled="publishing" @click="handlePublish">
             {{ publishing ? copy.publishing : copy.publish }}
           </button>
         </div>
@@ -351,7 +529,7 @@ onMounted(loadPage);
             <table class="data-table designer-table">
               <thead>
                 <tr>
-                  <th class="designer-time-head">{{ copy.time }}</th>
+                  <th class="designer-time-head"></th>
                   <th v-for="(header, index) in fixedHeaders" :key="`header-${index}`">
                     <div class="designer-header-field">
                       <span class="designer-cell-label">{{ `${copy.columns} ${index + 1}` }}</span>
@@ -359,20 +537,22 @@ onMounted(loadPage);
                     </div>
                   </th>
                   <th class="designer-actions-head">{{ copy.actions }}</th>
+                  <th class="designer-actions-head">{{ copy.slotToggle }}</th>
                 </tr>
               </thead>
 
               <tbody>
-                <tr v-for="(slot, rowIndex) in slots" :key="`slot-${rowIndex}`">
+                <tr v-for="(slot, rowIndex) in slots" :key="`slot-${rowIndex}`" :class="{ 'is-disabled-slot': isSlotDisabled(slot) }">
                   <td class="designer-slot-cell">
                     <div class="designer-slot-field">
                       <span class="designer-cell-label">{{ copy.slotLabel }}</span>
                       <UiSelect
-                        v-model="slots[rowIndex]"
+                        :model-value="getSlotTitle(slots[rowIndex])"
                         class="designer-slot-select"
                         :options="getAvailableTimeSlotOptions(rowIndex)"
                         :disabled="saving || publishing"
                         :placeholder="copy.slotPlaceholder(rowIndex + 1)"
+                        @update:model-value="handleSlotChange(rowIndex, $event)"
                       />
                     </div>
                   </td>
@@ -390,6 +570,19 @@ onMounted(loadPage);
                     <div class="designer-row-indicator-inner">
                       <span class="designer-cell-label designer-cell-label--ghost" aria-hidden="true">{{ copy.slotLabel }}</span>
                       <span>{{ copy.rowIndicator(rowIndex + 1) }}</span>
+                    </div>
+                  </td>
+                  <td class="designer-row-toggle">
+                    <div class="designer-row-toggle-inner">
+                      <span class="designer-cell-label designer-cell-label--ghost" aria-hidden="true">{{ copy.slotLabel }}</span>
+                      <button
+                        class="btn btn-secondary designer-slot-toggle"
+                        type="button"
+                        :disabled="!getSlotTitle(slot) || saving || publishing"
+                        @click="toggleSlotDisabled(rowIndex)"
+                      >
+                        {{ isSlotDisabled(slot) ? copy.enableSlot : copy.disableSlot }}
+                      </button>
                     </div>
                   </td>
                 </tr>

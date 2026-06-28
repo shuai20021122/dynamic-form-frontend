@@ -6,6 +6,10 @@ export function getCachedCurrentUser() {
   return currentUserCache;
 }
 
+export function setCachedCurrentUser(user) {
+  currentUserCache = user || null;
+}
+
 export function clearCachedCurrentUser() {
   currentUserCache = null;
 }

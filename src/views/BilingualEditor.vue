@@ -1,31 +1,61 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingBlock from "../components/LoadingBlock.vue";
 import { fetchCurrentUser } from "../api/auth.js";
-import { getBilingualEditor, saveBilingualEditor } from "../api/documents.js";
+import { previewDocument, saveBilingualEditor } from "../api/documents.js";
 
 const route = useRoute();
 const documentId = computed(() => route.params.id);
 
-const currentUser = ref(null);
 const loading = ref(true);
 const saving = ref(false);
 const errorMessage = ref("");
-const documentInfo = ref(null);
-const editor = ref(null);
+const previewHtml = ref("");
+const canEdit = ref(false);
+const currentBilingualDocumentId = ref(null);
+const editorContainer = ref(null);
+
+function getEditableElement() {
+  return editorContainer.value?.querySelector?.("#bilingual-preview-content") || null;
+}
+
+function resolvePreviewPayload(result) {
+  const data = result?.data || {};
+
+  if (!data?.html) {
+    throw new Error("后端未返回双语预览 HTML");
+  }
+
+  return data;
+}
+
+function resolveSavePayload(result) {
+  if (!result?.success) {
+    throw new Error(result?.message || "保存双语简表失败");
+  }
+
+  return result?.data || {};
+}
+
+async function syncInitialInnerHtml() {
+  await nextTick();
+}
 
 async function loadPage() {
   loading.value = true;
   errorMessage.value = "";
+
   try {
-    const [me, result] = await Promise.all([fetchCurrentUser(true), getBilingualEditor(documentId.value)]);
-    currentUser.value = me;
-    documentInfo.value = result?.data?.document || null;
-    editor.value = result?.data?.editor || null;
+    await fetchCurrentUser(true);
+    const data = resolvePreviewPayload(await previewDocument(documentId.value));
+    currentBilingualDocumentId.value = data.document_id || documentId.value;
+    previewHtml.value = data.html;
+    canEdit.value = Boolean(data.can_edit);
+    await syncInitialInnerHtml();
   } catch (error) {
     errorMessage.value = error.message || "加载失败";
   } finally {
@@ -34,13 +64,39 @@ async function loadPage() {
 }
 
 async function handleSave() {
-  if (!editor.value) return;
+  if (!currentBilingualDocumentId.value) {
+    errorMessage.value = "缺少双语文档 ID";
+    return;
+  }
+
+  if (!canEdit.value) {
+    errorMessage.value = "当前用户无权编辑双语简表";
+    return;
+  }
+
+  const editableEl = getEditableElement();
+  if (!editableEl) {
+    errorMessage.value = "未找到可编辑的双语内容区域";
+    return;
+  }
+
   saving.value = true;
   errorMessage.value = "";
+
   try {
-    const result = await saveBilingualEditor(documentId.value, editor.value);
-    documentInfo.value = result?.data?.document || documentInfo.value;
-    editor.value = result?.data?.editor || editor.value;
+    const saveData = resolveSavePayload(
+      await saveBilingualEditor(currentBilingualDocumentId.value, editableEl.innerHTML)
+    );
+    const data = resolvePreviewPayload(await previewDocument(currentBilingualDocumentId.value));
+
+    if (saveData.content_hash && data.content_hash && saveData.content_hash !== data.content_hash) {
+      console.warn("Bilingual save content hash mismatch between save response and preview response.");
+    }
+
+    previewHtml.value = data.html;
+    canEdit.value = Boolean(data.can_edit);
+    currentBilingualDocumentId.value = data.document_id || currentBilingualDocumentId.value;
+    await syncInitialInnerHtml();
   } catch (error) {
     errorMessage.value = error.message || "保存失败";
   } finally {
@@ -54,24 +110,19 @@ onMounted(loadPage);
 <template>
   <ErrorAlert :message="errorMessage" />
   <LoadingBlock v-if="loading" label="加载中..." />
-  <EmptyState v-else-if="!editor" title="暂无数据" />
+  <EmptyState v-else-if="!previewHtml" title="暂无数据" />
 
   <div v-else class="page-grid single-column">
     <section class="panel">
       <div class="panel-header">
-        <h2>{{ documentInfo?.original_filename || "编辑双语简表" }}</h2>
-        <button class="btn btn-primary" type="button" :disabled="saving" @click="handleSave">
+        <h2>编辑双语简表</h2>
+        <button class="btn btn-primary" type="button" :disabled="saving || !canEdit" @click="handleSave">
           {{ saving ? "保存中..." : "保存" }}
         </button>
       </div>
       <div class="panel-body stack-form">
-        <div v-for="item in editor.short_fields || []" :key="item.key" class="bilingual-row">
-          <div class="bilingual-head"><strong>{{ item.label }}</strong></div>
-          <div class="bilingual-columns">
-            <label class="field-block"><span>中文</span><input :value="item.zh_text" readonly /></label>
-            <label class="field-block"><span>English</span><input v-model="item.en_text" /></label>
-          </div>
-        </div>
+        <p v-if="!canEdit" class="muted-text">当前预览内容不可编辑。</p>
+        <div ref="editorContainer" class="docx-preview-content document-preview-html" v-html="previewHtml" />
       </div>
     </section>
   </div>

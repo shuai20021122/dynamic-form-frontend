@@ -15,6 +15,7 @@ import inactiveTeamIcon from "../assets/ui-icons/sidebar_inactive_team_group_lig
 import { changePassword } from "../api/auth.js";
 import { fetchCurrentInterviewerAccess, fetchTodayInterviewAccessCodes, verifyInterviewerAccess } from "../api/interviewerAccess.js";
 import { closeDialogWithAnimation, getDialogOriginFromEvent, openDialogWithAnimation, resetDialogMotion } from "../utils/dialogMotion.js";
+import CodeFlowBackdrop from "./CodeFlowBackdrop.vue";
 import ErrorAlert from "./ErrorAlert.vue";
 import { currentUiLanguage, getUiLanguageLabel, t, toggleUiLanguage } from "../stores/uiLanguage.js";
 
@@ -87,13 +88,15 @@ const navItems = computed(() => {
     activeIcon: activeFormIcon,
     inactiveIcon: inactiveFormIcon,
   });
-  items.push({
-    key: "history",
-    label: t("route.history"),
-    to: "/history",
-    activeIcon: activeHistoryIcon,
-    inactiveIcon: inactiveHistoryIcon,
-  });
+  if (role !== "interviewer") {
+    items.push({
+      key: "history",
+      label: t("route.history"),
+      to: "/history",
+      activeIcon: activeHistoryIcon,
+      inactiveIcon: inactiveHistoryIcon,
+    });
+  }
 
   return items;
 });
@@ -435,6 +438,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <aside class="sidebar" id="app-sidebar">
+      <CodeFlowBackdrop variant="sidebar" />
       <div class="brand">
         <button class="brand-button" type="button" @click="goHome">
           <img class="brand-mark-image" :src="logoBadgeIcon" alt="DF" />
@@ -625,7 +629,6 @@ onBeforeUnmount(() => {
               <button class="btn btn-primary" type="submit" :disabled="interviewerAccessLoading || interviewerAccessSubmitting">
                 {{ interviewerAccessSubmitting ? "校验中..." : "确认进入" }}
               </button>
-              <button class="btn btn-secondary" type="button" :disabled="interviewerAccessSubmitting" @click="cancelInterviewerAccess">取消</button>
               <button class="btn btn-danger" type="button" :disabled="interviewerAccessSubmitting" @click="returnToLoginFromInterviewerAccess">
                 返回登录页
               </button>

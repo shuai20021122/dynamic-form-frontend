@@ -43,10 +43,10 @@ export function getBilingualEditor(documentId) {
   return request(`/api/documents/${documentId}/bilingual-editor`);
 }
 
-export function saveBilingualEditor(documentId, editor) {
+export function saveBilingualEditor(documentId, html) {
   return request(`/api/documents/${documentId}/bilingual-editor`, {
     method: "PUT",
-    body: JSON.stringify({ editor }),
+    body: JSON.stringify({ html }),
   });
 }
 

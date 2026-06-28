@@ -32,8 +32,18 @@ export function listReviews(entryId) {
 }
 
 export function saveReview(entryId, payload) {
+  const normalizedPayload = {
+    result: payload?.result ?? "pending",
+    review_result: payload?.result ?? "pending",
+    status: payload?.result ?? "pending",
+    comment: payload?.comment ?? "",
+    review_comment: payload?.comment ?? "",
+    remarks: payload?.comment ?? "",
+    content: payload?.comment ?? "",
+  };
+
   return request(`/api/entries/${entryId}/review`, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(normalizedPayload),
   });
 }

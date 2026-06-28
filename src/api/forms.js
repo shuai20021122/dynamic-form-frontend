@@ -65,8 +65,17 @@ export function getFormEntries(formId, params = {}) {
   return request(`/api/forms/${formId}/entries${buildQuery(params)}`);
 }
 
-export function getSimpleDesigner(formId) {
-  return request(`/api/forms/${formId}/simple-designer`);
+export function getFormEntryReviews(formId, entryId) {
+  return request(`/api/forms/${formId}/entries/${entryId}/reviews`);
+}
+
+export function getSimpleDesigner(formId, params = {}) {
+  return request(`/api/forms/${formId}/simple-designer${buildQuery({ ...params, _ts: Date.now() })}`, {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
 }
 
 export function saveSimpleDesigner(formId, payload) {

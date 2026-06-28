@@ -7,7 +7,7 @@ import LoadingBlock from "../components/LoadingBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { fetchCurrentUser } from "../api/auth.js";
 import { exportForm } from "../api/export.js";
-import { closeForm, deleteForm, listForms, publishForm, quickCreateForm, updateForm } from "../api/forms.js";
+import { closeForm, deleteForm, getFormTable, listForms, publishForm, quickCreateForm, updateForm } from "../api/forms.js";
 import refreshIcon from "../assets/ui-icons/refresh_gray.svg";
 import { getCachedResource, setCachedResource } from "../stores/resourceCache.js";
 import { currentUiLanguage, t } from "../stores/uiLanguage.js";
@@ -15,11 +15,14 @@ import { closeDialogWithAnimation, getDialogOriginFromEvent, openDialogWithAnima
 import { formatDateOnly, formatDateTime, getFormStatusLabel } from "../utils/format.js";
 
 const router = useRouter();
+const designerToastStorageKey = "forms:designer:toast";
 const currentUser = ref(null);
 const forms = ref([]);
 const loading = ref(true);
 const saving = ref(false);
 const errorMessage = ref("");
+const toastMessage = ref("");
+const formSlotStatsMap = ref({});
 const activeTitleId = ref("");
 const dateInputRef = ref(null);
 const actionDialog = ref(null);
@@ -30,17 +33,36 @@ const actionDialogTitle = ref("");
 const actionDialogMessage = ref("");
 const actionDialogConfirmText = ref("");
 const actionDialogTone = ref("danger");
+let toastTimer = null;
 const formState = ref({
   id: "",
   title: "",
   date: "",
 });
 
+function showToast(message) {
+  toastMessage.value = message;
+  if (toastTimer) {
+    window.clearTimeout(toastTimer);
+  }
+  toastTimer = window.setTimeout(() => {
+    toastMessage.value = "";
+    toastTimer = null;
+  }, 2200);
+}
+
 const canManage = computed(() => ["super_admin", "academic_admin"].includes(currentUser.value?.role));
+const showSlotUsageColumn = computed(() => !canManage.value);
 const draftForms = computed(() => forms.value.filter((item) => item.status === "draft"));
 const activeForms = computed(() => forms.value.filter((item) => item.status === "active"));
 const formsCacheKey = computed(() => `forms:list:${currentUiLanguage.value}`);
-const viewActionLabel = computed(() => (currentUiLanguage.value === "en-US" ? "View" : "查看"));
+const viewActionLabel = computed(() => {
+  if (currentUser.value?.role === "interviewer") {
+    return currentUiLanguage.value === "en-US" ? "Enter Interview Review" : "进入面试评审";
+  }
+
+  return currentUiLanguage.value === "en-US" ? "View" : "查看";
+});
 const dateDisplayValue = computed(() => {
   if (!formState.value.date) {
     return t("forms.datePlaceholder");
@@ -98,6 +120,71 @@ function openDatePicker() {
   dateInputRef.value.click();
 }
 
+function buildDefaultSlotStats() {
+  return {
+    total: 0,
+    booked: 0,
+    free: 0,
+  };
+}
+
+function buildFormSlotStats(rows = []) {
+  const stats = buildDefaultSlotStats();
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+
+  normalizedRows.forEach((row) => {
+    stats.total += 1;
+
+    if (row?.status === "empty") {
+      stats.free += 1;
+    }
+
+    if (row?.status === "occupied" || row?.status === "filled" || row?.entry?.id) {
+      stats.booked += 1;
+    }
+  });
+
+  return stats;
+}
+
+function getFormSlotStats(formId) {
+  return formSlotStatsMap.value[String(formId)] || buildDefaultSlotStats();
+}
+
+async function loadReadonlyFormSlotStats(items = []) {
+  if (canManage.value) {
+    formSlotStatsMap.value = {};
+    return;
+  }
+
+  const activeItems = (items || []).filter((item) => item?.status === "active" && item?.id);
+  if (!activeItems.length) {
+    formSlotStatsMap.value = {};
+    return;
+  }
+
+  const results = await Promise.allSettled(
+    activeItems.map((item) => getFormTable(item.id, { ui_lang: currentUiLanguage.value }))
+  );
+
+  const nextMap = {};
+  results.forEach((result, index) => {
+    const formId = String(activeItems[index]?.id || "");
+    if (!formId) {
+      return;
+    }
+
+    if (result.status === "fulfilled") {
+      nextMap[formId] = buildFormSlotStats(result.value?.data?.rows || []);
+      return;
+    }
+
+    nextMap[formId] = buildDefaultSlotStats();
+  });
+
+  formSlotStatsMap.value = nextMap;
+}
+
 async function loadPage() {
   const cached = getCachedResource(formsCacheKey.value);
   if (cached) {
@@ -114,6 +201,7 @@ async function loadPage() {
     const [me, formsResult] = await Promise.all([fetchCurrentUser(), listForms({ ui_lang: currentUiLanguage.value })]);
     currentUser.value = me;
     forms.value = (formsResult?.data?.items || []).filter((item) => item.status !== "closed");
+    await loadReadonlyFormSlotStats(forms.value);
     setCachedResource(formsCacheKey.value, {
       currentUser: me,
       forms: forms.value,
@@ -244,6 +332,13 @@ function handleInterviewerAccessGranted() {
 }
 
 onMounted(() => {
+  if (typeof window !== "undefined") {
+    const storedToast = window.sessionStorage.getItem(designerToastStorageKey);
+    if (storedToast) {
+      showToast(storedToast);
+      window.sessionStorage.removeItem(designerToastStorageKey);
+    }
+  }
   loadPage();
   document.addEventListener("click", closeTitleBubble);
   window.addEventListener("app:interviewer-access-granted", handleInterviewerAccessGranted);
@@ -252,6 +347,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("click", closeTitleBubble);
   window.removeEventListener("app:interviewer-access-granted", handleInterviewerAccessGranted);
+  if (toastTimer) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
   resetDialogMotion(actionDialog);
 });
 
@@ -262,6 +361,7 @@ watch(currentUiLanguage, () => {
 
 <template>
   <ErrorAlert :message="errorMessage" />
+  <div v-if="toastMessage" class="light-toast" role="status" aria-live="polite">{{ toastMessage }}</div>
   <LoadingBlock v-if="loading" :label="t('common.loading')" />
 
   <section v-else class="forms-page" :class="{ 'forms-page--readonly': !canManage }">
@@ -314,12 +414,13 @@ watch(currentUiLanguage, () => {
                     <th>{{ t("forms.status") }}</th>
                     <th>{{ t("forms.date") }}</th>
                     <th>{{ t("forms.updatedAt") }}</th>
+                    <th v-if="showSlotUsageColumn">{{ t("forms.slotUsage") }}</th>
                     <th>{{ t("forms.actions") }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="!draftForms.length">
-                    <td class="forms-empty-row" colspan="5">{{ t("common.noData") }}</td>
+                    <td class="forms-empty-row" :colspan="showSlotUsageColumn ? 6 : 5">{{ t("common.noData") }}</td>
                   </tr>
                   <tr v-for="item in draftForms" :key="item.id">
                     <td>
@@ -343,6 +444,13 @@ watch(currentUiLanguage, () => {
                     <td><StatusBadge :text="getFormStatusLabel(item.status)" :tone="getTone(item.status)" /></td>
                     <td class="forms-table-date">{{ formatDateOnly(item.start_time) }}</td>
                     <td class="forms-table-datetime">{{ formatDateTime(item.updated_at || item.created_at) }}</td>
+                    <td v-if="showSlotUsageColumn" class="forms-slot-usage-cell">
+                      <div class="forms-slot-usage">
+                        <span>{{ t("forms.slotsTotal") }} {{ getFormSlotStats(item.id).total }}</span>
+                        <span>{{ t("forms.slotsBooked") }} {{ getFormSlotStats(item.id).booked }}</span>
+                        <span>{{ t("forms.slotsFree") }} {{ getFormSlotStats(item.id).free }}</span>
+                      </div>
+                    </td>
                     <td>
                       <div class="users-table-actions forms-table-actions">
                         <RouterLink class="users-action-btn users-action-btn--blue" :to="`/forms/${item.id}/designer`">{{ t("forms.design") }}</RouterLink>
@@ -352,7 +460,7 @@ watch(currentUiLanguage, () => {
                           type="button"
                           @click="startEdit(item)"
                         >
-                          {{ t("forms.edit") }}
+                          {{ currentUiLanguage === "en-US" ? "Edit Create Form" : "创建表单编辑" }}
                         </button>
                         <button
                           v-if="canManage"
@@ -392,12 +500,13 @@ watch(currentUiLanguage, () => {
                     <th>{{ t("forms.status") }}</th>
                     <th>{{ t("forms.date") }}</th>
                     <th>{{ t("forms.updatedAt") }}</th>
+                    <th v-if="showSlotUsageColumn">{{ t("forms.slotUsage") }}</th>
                     <th>{{ t("forms.actions") }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="!activeForms.length">
-                    <td class="forms-empty-row" colspan="5">{{ t("common.noData") }}</td>
+                    <td class="forms-empty-row" :colspan="showSlotUsageColumn ? 6 : 5">{{ t("common.noData") }}</td>
                   </tr>
                   <tr v-for="item in activeForms" :key="item.id">
                     <td>
@@ -421,6 +530,13 @@ watch(currentUiLanguage, () => {
                     <td><StatusBadge :text="getFormStatusLabel(item.status)" :tone="getTone(item.status)" /></td>
                     <td class="forms-table-date">{{ formatDateOnly(item.start_time) }}</td>
                     <td class="forms-table-datetime">{{ formatDateTime(item.updated_at || item.created_at) }}</td>
+                    <td v-if="showSlotUsageColumn" class="forms-slot-usage-cell">
+                      <div class="forms-slot-usage">
+                        <span>{{ t("forms.slotsTotal") }} {{ getFormSlotStats(item.id).total }}</span>
+                        <span>{{ t("forms.slotsBooked") }} {{ getFormSlotStats(item.id).booked }}</span>
+                        <span>{{ t("forms.slotsFree") }} {{ getFormSlotStats(item.id).free }}</span>
+                      </div>
+                    </td>
                     <td>
                       <div class="users-table-actions forms-table-actions">
                         <template v-if="canManage">

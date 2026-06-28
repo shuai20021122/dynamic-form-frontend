@@ -55,7 +55,7 @@ const routes = [
         path: "forms/:id/designer",
         name: "form-designer",
         component: FormDesigner,
-        meta: { title: "表格设计界面" },
+        meta: { title: "表单编辑" },
       },
       {
         path: "forms/:id/fill",

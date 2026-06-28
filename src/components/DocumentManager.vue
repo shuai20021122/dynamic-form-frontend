@@ -1,11 +1,10 @@
-<script setup>
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+﻿<script setup>
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 import {
   deleteDocument,
   downloadDocument,
   generateBilingualDocument,
-  getBilingualEditor,
   getOnlineSummaryDetail,
   listEntryDocuments,
   previewDocument,
@@ -43,7 +42,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["updated", "fill-simple"]);
+const emit = defineEmits(["updated", "fill-simple", "close-all"]);
 
 const documents = ref([]);
 const loading = ref(false);
@@ -55,6 +54,8 @@ const previewDialog = ref(null);
 const previewTitle = ref(t("document.previewTitle"));
 const previewLoading = ref(false);
 const previewHtml = ref("");
+const previewStructuredData = ref(null);
+const previewDialogFullscreen = ref(false);
 const activeSubDialog = ref("");
 
 const confirmDialog = ref(null);
@@ -63,11 +64,16 @@ const confirmDocumentId = ref(null);
 const confirmOriginPoint = ref(null);
 
 const editorDialog = ref(null);
+const editorDialogFullscreen = ref(false);
 const editorLoading = ref(false);
 const editorSaving = ref(false);
+const editorCloseConfirmDialog = ref(null);
 const editorData = ref(null);
 const editorPreviewFallback = ref(null);
+const editorHtml = ref("");
+const editorCanEdit = ref(false);
 const editingDocumentId = ref(null);
+const editorInitialSnapshot = ref("");
 const structuredEditorSectionKeys = ["short_fields", "work_experiences", "education_experiences", "long_fields"];
 const generateProgress = ref(0);
 let generateProgressTimer = null;
@@ -84,6 +90,10 @@ const documentsCacheKey = computed(() => `entry:documents:${props.entryId || ""}
 const generateStateCacheKey = computed(() => `entry:documents:generate:${props.entryId || ""}`);
 const editingDocumentInfo = computed(() => documents.value.find((item) => String(item.id) === String(editingDocumentId.value)) || null);
 const editorDialogTitle = computed(() => editingDocumentInfo.value?.original_filename || t("document.editorTitle"));
+const editorCloseConfirmTitle = computed(() => (currentUiLanguage.value === "en-US" ? "Confirm Close" : "确认关闭"));
+const editorCloseConfirmBody = computed(() =>
+  currentUiLanguage.value === "en-US" ? "Content is not saved. Are you sure you want to close?" : "内容未保存，确认关闭？"
+);
 const getPreviewCacheKey = (documentId) => `document:preview:${documentId || ""}`;
 const getEditorCacheKey = (documentId) => `document:editor:${documentId || ""}`;
 const hasStructuredEditorSections = computed(
@@ -109,9 +119,9 @@ const genericEditorSections = computed(() => {
     }))
     .filter((section) => section.blocks.length > 0);
 });
-const structuredBilingualSheet = computed(() => {
-  const shortFields = editorData.value?.short_fields || [];
-  const longFields = editorData.value?.long_fields || [];
+function resolveStructuredBilingualSheetFromData(data) {
+  const shortFields = data?.short_fields || [];
+  const longFields = data?.long_fields || [];
   const findShort = (aliases) => findEditorFieldByAliases(shortFields, aliases);
   const findLong = (aliases) => findEditorFieldByAliases(longFields, aliases);
 
@@ -122,11 +132,11 @@ const structuredBilingualSheet = computed(() => {
     nationality: findShort(["nationality", "国籍"]),
     organization: findShort(["organizationname", "companyname", "公司名称"]),
     position: findShort(["position", "positiontitle", "title", "职务", "职位"]),
-    assets: findShort(["assets", "总资产"]),
+    assets: findShort(["assets", "asset", "totalassets", "total_assets"]),
     employees: findShort(["employees", "员工人数"]),
     revenue: findShort(["revenue", "营收", "营业收入", "企业营收"]),
     industry: findShort(["industry", "行业", "公司行业"]),
-    introduction: findLong(["introduction", "企业简介", "companyprofile"]),
+    introduction: findLong(["introduction", "companyprofile", "company_profile", "companyintroduction"]),
     professionalExperience: findLong(["professionalexperience", "个人职业经历", "workexperience"]),
     programMotivation: findLong([
       "programmotivation",
@@ -135,21 +145,21 @@ const structuredBilingualSheet = computed(() => {
       "动机",
     ]),
     note: findLong(["note", "备注"]),
-    workExperiences: editorData.value?.work_experiences || [],
-    educationExperiences: editorData.value?.education_experiences || [],
+    workExperiences: data?.work_experiences || [],
+    educationExperiences: data?.education_experiences || [],
   };
-});
-const resolvedStructuredBilingualSheet = computed(() => {
-  const shortFields = editorData.value?.short_fields || [];
-  const longFields = editorData.value?.long_fields || [];
+}
+
+function resolveStructuredBilingualSheetWithFallback(data) {
+  const structured = resolveStructuredBilingualSheetFromData(data);
+  const shortFields = data?.short_fields || [];
+  const longFields = data?.long_fields || [];
 
   return {
-    ...structuredBilingualSheet.value,
-    name:
-      structuredBilingualSheet.value.name ||
-      findEditorFieldByAliases(shortFields, ["full_name", "candidate_name", "applicantname"]),
+    ...structured,
+    name: structured.name || findEditorFieldByAliases(shortFields, ["full_name", "candidate_name", "applicantname"]),
     dateOfBirth:
-      structuredBilingualSheet.value.dateOfBirth ||
+      structured.dateOfBirth ||
       findEditorFieldByAliases(shortFields, [
         "birthdate",
         "dob",
@@ -158,44 +168,23 @@ const resolvedStructuredBilingualSheet = computed(() => {
         "dateofbirthformatddmmyyyy",
         "dateofbirthformatdaymonthyear",
       ]),
-    gender:
-      structuredBilingualSheet.value.gender ||
-      findEditorFieldByAliases(shortFields, ["sex", "gendervalue", "gender_value", "gendermalefemale", "sexmalefemale"]),
-    nationality:
-      structuredBilingualSheet.value.nationality ||
-      findEditorFieldByAliases(shortFields, ["citizenship", "country", "nationalitystatus"]),
-    organization:
-      structuredBilingualSheet.value.organization ||
-      findEditorFieldByAliases(shortFields, ["company", "organization", "organization_name", "company_name"]),
-    position:
-      structuredBilingualSheet.value.position ||
-      findEditorFieldByAliases(shortFields, ["jobtitle", "job_position"]),
-    assets:
-      structuredBilingualSheet.value.assets ||
-      findEditorFieldByAliases(shortFields, ["asset", "totalassets", "total_assets"]),
-    employees:
-      structuredBilingualSheet.value.employees ||
-      findEditorFieldByAliases(shortFields, ["employee", "staff", "staffcount", "employeecount"]),
-    revenue:
-      structuredBilingualSheet.value.revenue ||
-      findEditorFieldByAliases(shortFields, ["turnover", "income", "annualrevenue"]),
-    industry:
-      structuredBilingualSheet.value.industry ||
-      findEditorFieldByAliases(shortFields, ["businessindustry", "companyindustry"]),
-    introduction:
-      structuredBilingualSheet.value.introduction ||
-      findEditorFieldByAliases(longFields, ["companyintroduction", "company_profile"]),
-    professionalExperience:
-      structuredBilingualSheet.value.professionalExperience ||
-      findEditorFieldByAliases(longFields, ["individualexperience", "careerhistory"]),
-    programMotivation:
-      structuredBilingualSheet.value.programMotivation ||
-      findEditorFieldByAliases(longFields, ["motivation", "reason", "program_reason"]),
-    note:
-      structuredBilingualSheet.value.note ||
-      findEditorFieldByAliases(longFields, ["remark", "remarks", "memo"]),
+    gender: structured.gender || findEditorFieldByAliases(shortFields, ["sex", "gendervalue", "gender_value", "gendermalefemale", "sexmalefemale"]),
+    nationality: structured.nationality || findEditorFieldByAliases(shortFields, ["citizenship", "country", "nationalitystatus"]),
+    organization: structured.organization || findEditorFieldByAliases(shortFields, ["company", "organization", "organization_name", "company_name"]),
+    position: structured.position || findEditorFieldByAliases(shortFields, ["jobtitle", "job_position"]),
+    assets: structured.assets || findEditorFieldByAliases(shortFields, ["asset", "totalassets", "total_assets"]),
+    employees: structured.employees || findEditorFieldByAliases(shortFields, ["employee", "staff", "staffcount", "employeecount"]),
+    revenue: structured.revenue || findEditorFieldByAliases(shortFields, ["turnover", "income", "annualrevenue"]),
+    industry: structured.industry || findEditorFieldByAliases(shortFields, ["businessindustry", "companyindustry"]),
+    introduction: structured.introduction || findEditorFieldByAliases(longFields, ["companyintroduction", "company_profile"]),
+    professionalExperience: structured.professionalExperience || findEditorFieldByAliases(longFields, ["individualexperience", "careerhistory"]),
+    programMotivation: structured.programMotivation || findEditorFieldByAliases(longFields, ["motivation", "reason", "program_reason"]),
+    note: structured.note || findEditorFieldByAliases(longFields, ["remark", "remarks", "memo"]),
   };
-});
+}
+
+const resolvedStructuredBilingualSheet = computed(() => resolveStructuredBilingualSheetWithFallback(editorData.value));
+const previewStructuredBilingualSheet = computed(() => resolveStructuredBilingualSheetWithFallback(previewStructuredData.value));
 const generateButtonProgressStyle = computed(() => ({
   "--generate-progress-width": `${generateProgress.value}%`,
 }));
@@ -210,7 +199,9 @@ const confirmDialogActionLabel = computed(() =>
   confirmActionType.value === "generate" ? t("document.generateBilingual") : t("document.delete")
 );
 const confirmDialogActionClass = computed(() => (confirmActionType.value === "delete" ? "btn btn-danger" : "btn btn-primary"));
-const fillSimpleButtonLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Fill Resume" : "简表填写"));
+const fillSimpleButtonLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Fill Summary Sheet" : "简表填写"));
+const previewDialogToggleLabel = computed(() => (previewDialogFullscreen.value ? (currentUiLanguage.value === "en-US" ? "Windowed" : "窗口展示") : currentUiLanguage.value === "en-US" ? "Fullscreen" : "全屏展示"));
+const editorDialogToggleLabel = computed(() => (editorDialogFullscreen.value ? (currentUiLanguage.value === "en-US" ? "Windowed" : "窗口展示") : currentUiLanguage.value === "en-US" ? "Fullscreen" : "全屏展示"));
 let restoreGenerateTaskPromise = null;
 
 function isPlainObject(value) {
@@ -278,14 +269,14 @@ function buildOnlineSummaryPreviewHtml(detail) {
   `;
 
   return `
-    <h1 style="text-align:center;">Candidate Summary Sheet<br>候选人简表</h1>
+    <h1 style="text-align:center;">Candidate Summary Sheet<br>\u5019\u9009\u4eba\u7b80\u8868</h1>
     <table>
       <tbody>
         <tr><th colspan="4">Basic Information<br>基本信息</th></tr>
         <tr>
           <td>Name<br>姓名</td>
           <td>${escapeHtml(detail?.name)}</td>
-          <td>Date of Birth<br>出生日期<br>（格式: 日/月/年）</td>
+          <td>Date of Birth<br>出生日期<br>（格式：日/月/年）</td>
           <td>${escapeHtml(detail?.date_of_birth)}</td>
         </tr>
         <tr>
@@ -299,7 +290,7 @@ function buildOnlineSummaryPreviewHtml(detail) {
           <td colspan="2">${escapeHtml(detail?.organization_name)}</td>
           <td>Position<br>职务<br><br>${escapeHtml(detail?.position)}</td>
         </tr>
-        <tr><th colspan="4">Company Profile<br>企业概况</th></tr>
+        <tr><th colspan="4">Company Profile<br>公司概况</th></tr>
         <tr>
           <td>Assets<br>总资产</td>
           <td>${escapeHtml(detail?.assets)}</td>
@@ -337,9 +328,9 @@ function buildOnlineSummaryPreviewHtml(detail) {
         ${educationHtml}
       </tbody>
     </table>
-    ${block("Introduction", "企业简介", detail?.introduction)}
+    ${block("Introduction", "\u4f01\u4e1a\u7b80\u4ecb", detail?.introduction)}
     ${block("Professional Experience", "个人职业经历", detail?.professional_experience)}
-    ${block("Why do you want to join this program, and what do you hope to gain from it?", "您为什么希望来参加伦比亚大学商学院全球价值投资家项目? 您希望通过课程获得什么？", detail?.program_motivation)}
+    ${block("Why do you want to join this program, and what do you hope to gain from it?", "您为什么想参加这个项目？您希望通过课程获得什么？", detail?.program_motivation)}
     ${block("Note", "备注", detail?.note)}
   `;
 }
@@ -379,14 +370,14 @@ function buildOnlineSummaryPreviewHtmlSafe(detail) {
   `;
 
   return `
-    <h1 style="text-align:center;">Candidate Summary Sheet<br>候选人简表</h1>
+    <h1 style="text-align:center;">Candidate Summary Sheet<br>\u5019\u9009\u4eba\u7b80\u8868</h1>
     <table>
       <tbody>
         <tr><th colspan="4">Basic Information<br>基本信息</th></tr>
         <tr>
           <td>Name<br>姓名</td>
           <td>${escapeHtml(detail?.name)}</td>
-          <td>Date of Birth<br>出生日期<br>（格式: 日/月/年）</td>
+          <td>Date of Birth<br>出生日期<br>（格式：日/月/年）</td>
           <td>${escapeHtml(detail?.date_of_birth)}</td>
         </tr>
         <tr>
@@ -400,7 +391,7 @@ function buildOnlineSummaryPreviewHtmlSafe(detail) {
           <td colspan="2">${escapeHtml(detail?.organization_name)}</td>
           <td>Position<br>职务<br><br>${escapeHtml(detail?.position)}</td>
         </tr>
-        <tr><th colspan="4">Company Profile<br>企业概况</th></tr>
+        <tr><th colspan="4">Company Profile<br>公司概况</th></tr>
         <tr>
           <td>Assets<br>总资产</td>
           <td>${escapeHtml(detail?.assets)}</td>
@@ -438,9 +429,9 @@ function buildOnlineSummaryPreviewHtmlSafe(detail) {
         ${educationHtml}
       </tbody>
     </table>
-    ${block("Introduction", "企业简介", detail?.introduction)}
+    ${block("Introduction", "\u4f01\u4e1a\u7b80\u4ecb", detail?.introduction)}
     ${block("Professional Experience", "个人职业经历", detail?.professional_experience)}
-    ${block("Why do you want to join this program, and what do you hope to gain from it?", "您为什么希望来参加伦比亚大学商学院全球价值投资家项目? 您希望通过课程获得什么？", detail?.program_motivation)}
+    ${block("Why do you want to join this program, and what do you hope to gain from it?", "您为什么想参加这个项目？您希望通过课程获得什么？", detail?.program_motivation)}
     ${block("Note", "备注", detail?.note)}
   `;
 }
@@ -457,7 +448,7 @@ function formatEditorLabel(value) {
 function normalizeEditorAlias(value) {
   return String(value || "")
     .toLowerCase()
-    .replace(/[\s\r\n/()（）:：.,，'"_\-]+/g, "");
+    .replace(/[\s\r\n/()（）:：,，"?_\-]+/g, "");
 }
 
 function findEditorFieldByAliases(fields, aliases = []) {
@@ -682,7 +673,15 @@ function splitMixedLanguageText(value) {
     return { zh: "", en: "" };
   }
 
-  const tokens = text.match(/[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。；：、“”‘’《》【】（）\-]*|[A-Za-z][A-Za-z0-9\s,.;:!?()\-/'"%&]+|[0-9]+|[^\s]/g) || [text];
+  const displaySplit = splitDisplayBilingualText(text);
+  if (displaySplit) {
+    return {
+      zh: cleanLanguageChunk(displaySplit.zh),
+      en: cleanLanguageChunk(displaySplit.en),
+    };
+  }
+
+  const tokens = text.match(/[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。；：、“”‘’《》【】（）-]*|[A-Za-z][A-Za-z0-9\s,.;:!?()\-/'"%&]+|[0-9]+|[^\s]/g) || [text];
   const zhParts = [];
   const enParts = [];
 
@@ -702,13 +701,13 @@ function splitMixedLanguageText(value) {
 
     if (hasZh && hasEn) {
       const zhOnly = token.replace(/[A-Za-z0-9\s,.;:!?()\-/'"%&]+/g, "");
-      const enOnly = token.replace(/[\u4e00-\u9fff，。；：、“”‘’《》【】（）]/g, " ");
+      const enOnly = token.replace(/[\u4e00-\u9fff，。；：“”‘’（）《》【】]/g, " ");
       if (zhOnly.trim()) zhParts.push(zhOnly);
       if (enOnly.trim()) enParts.push(enOnly);
       return;
     }
 
-    if (/[，。；：、“”‘’《》【】（）]/.test(token)) {
+    if (/[\u4e00-\u9fff，。；：“”‘’（）《》【】]/.test(token)) {
       zhParts.push(token);
       return;
     }
@@ -810,11 +809,28 @@ function extractPreviewTableFieldPairs(html) {
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(String(html || ""), "text/html");
-  const rows = Array.from(doc.querySelectorAll("table tr"));
+  const tables = Array.from(doc.querySelectorAll("table"));
+  const basicInfoTable =
+    tables.find((table) => {
+      const tableText = normalizeEditorAlias(normalizePreviewText(table.textContent || ""));
+      return (
+        tableText.includes("name") &&
+        tableText.includes("dateofbirth") &&
+        tableText.includes("gender") &&
+        tableText.includes("nationality") &&
+        tableText.includes("organizationname") &&
+        tableText.includes("assets")
+      );
+    }) || null;
+  const rows = basicInfoTable ? Array.from(basicInfoTable.querySelectorAll("tr")) : [];
   const pairs = [];
 
   rows.forEach((row) => {
-    const cells = Array.from(row.children);
+    const cells = Array.from(row.children).filter((cell) => /^(TD|TH)$/i.test(cell.tagName));
+    if (!cells.length || cells.every((cell) => cell.tagName === "TH")) {
+      return;
+    }
+
     cells.forEach((cell, index) => {
       const label = normalizePreviewText(cell.textContent || "");
       if (!label || index >= cells.length - 1) {
@@ -840,6 +856,98 @@ function extractPreviewTableFieldPairs(html) {
   return pairs;
 }
 
+function getStructuredShortFieldMetaFromLabel(label) {
+  const normalized = normalizeEditorAlias(label);
+  if (!normalized) {
+    return null;
+  }
+
+  const definitions = [
+    { match: ["name", "姓名"], key: "name", label: "Name" },
+    { match: ["dateofbirth", "出生日期", "birthday"], key: "dateofbirth", label: "Date of Birth" },
+    { match: ["gender", "性别", "sex"], key: "gender", label: "Gender" },
+    { match: ["nationality", "国籍", "citizenship"], key: "nationality", label: "Nationality" },
+    { match: ["organizationname", "公司名称", "companyname"], key: "organizationname", label: "Organization Name" },
+    { match: ["position", "职务", "职位"], key: "position", label: "Position" },
+    { match: ["assets", "总资产", "totalassets"], key: "assets", label: "Assets" },
+    { match: ["employees", "员工人数", "employeecount", "staffcount"], key: "employees", label: "Employees" },
+    { match: ["revenue", "企业营收", "营业收入", "turnover"], key: "revenue", label: "Revenue" },
+    { match: ["industry", "公司行业", "行业", "businessindustry"], key: "industry", label: "Industry" },
+  ];
+
+  return (
+    definitions.find((item) => item.match.some((token) => normalized.includes(normalizeEditorAlias(token)))) || null
+  );
+}
+
+function getStructuredLongFieldMetaFromHeading(label) {
+  const normalized = normalizeEditorAlias(label);
+  if (!normalized) {
+    return null;
+  }
+
+  const definitions = [
+    { match: ["introduction", "企业简介", "companyprofile", "companyintroduction"], key: "introduction", label: "Introduction" },
+    { match: ["professionalexperience", "个人职业经历", "individualexperience", "careerhistory", "workexperience"], key: "professionalexperience", label: "Professional Experience" },
+    {
+      match: ["whydoyouwanttojointhisprogramandwhatdoyouhopetogainfromit", "您为什么想参加这个项目", "programmotivation", "programreason", "motivation"],
+      key: "programmotivation",
+      label: "Program Motivation",
+    },
+    { match: ["note", "备注", "remark", "memo"], key: "note", label: "Note" },
+  ];
+
+  return (
+    definitions.find((item) => item.match.some((token) => normalized.includes(normalizeEditorAlias(token)))) || null
+  );
+}
+
+function composeEditorMixedText(zh, en) {
+  const normalizedZh = String(zh || "").trim();
+  const normalizedEn = String(en || "").trim();
+  if (normalizedZh && normalizedEn) {
+    return `${normalizedZh} / ${normalizedEn}`;
+  }
+  return normalizedZh || normalizedEn || "";
+}
+
+function mergeEditorFieldValue(targetField, fallbackField) {
+  if (!targetField || !fallbackField) {
+    return;
+  }
+
+  const targetValue = splitEditorMixedValue(getEditorMixedText(targetField), String(targetField?.en_text || "").trim() && !String(targetField?.zh_text || "").trim() ? "en" : "zh");
+  const fallbackValue = splitEditorMixedValue(getEditorMixedText(fallbackField), String(fallbackField?.en_text || "").trim() && !String(fallbackField?.zh_text || "").trim() ? "en" : "zh");
+  const mergedText = composeEditorMixedText(targetValue.zh || fallbackValue.zh, targetValue.en || fallbackValue.en);
+
+  if (mergedText && mergedText !== getEditorMixedText(targetField)) {
+    setEditorMixedText(targetField, mergedText);
+  }
+}
+
+function mergeEditorRowValue(targetRow, fallbackRow, aliasesZh = [], aliasesEn = [], rawAliases = []) {
+  if (!targetRow || !fallbackRow) {
+    return;
+  }
+
+  const targetText = getEditorRowMixedText(targetRow, aliasesZh, aliasesEn, rawAliases);
+  const fallbackText = getEditorRowMixedText(fallbackRow, aliasesZh, aliasesEn, rawAliases);
+  const targetValue = splitEditorMixedValue(targetText, "zh");
+  const fallbackValue = splitEditorMixedValue(fallbackText, "zh");
+  const mergedText = composeEditorMixedText(targetValue.zh || fallbackValue.zh, targetValue.en || fallbackValue.en);
+
+  if (mergedText && mergedText !== targetText) {
+    setEditorRowMixedText(targetRow, aliasesZh, aliasesEn, mergedText, rawAliases);
+  }
+
+  if (rawAliases.length) {
+    const rawValue = getEditorObjectValue(fallbackRow, rawAliases);
+    if (rawValue && !getEditorObjectValue(targetRow, rawAliases)) {
+      setEditorObjectValue(targetRow, rawAliases, rawValue);
+    }
+  }
+}
+
 function buildStructuredFallbackEditorFromPreviewHtml(html) {
   const pairs = extractPreviewTableFieldPairs(html);
   if (typeof window === "undefined" || typeof DOMParser === "undefined") {
@@ -847,9 +955,10 @@ function buildStructuredFallbackEditorFromPreviewHtml(html) {
       ? {
           short_fields: pairs.map((pair, index) => {
             const separated = splitMixedLanguageText(pair.value);
+            const meta = getStructuredShortFieldMetaFromLabel(pair.label);
             return {
-              key: `table-fallback-short-${index + 1}`,
-              label: pair.label,
+              key: meta?.key || `table-fallback-short-${index + 1}`,
+              label: meta?.label || pair.label,
               zh_text: separated.zh || pair.value,
               en_text: separated.en || "",
             };
@@ -863,9 +972,8 @@ function buildStructuredFallbackEditorFromPreviewHtml(html) {
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(String(html || ""), "text/html");
-  const headings = Array.from(doc.querySelectorAll("h3"));
-  const workHeading = headings.find((item) => /work experience|工作经历/i.test(normalizePreviewText(item.textContent || "")));
-  const educationHeading = headings.find((item) => /educational background|教育经历/i.test(normalizePreviewText(item.textContent || "")));
+  const headings = Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+  const allTables = Array.from(doc.querySelectorAll("table"));
 
   const parseMixedCell = (value) => {
     const text = normalizePreviewText(value || "");
@@ -877,53 +985,119 @@ function buildStructuredFallbackEditorFromPreviewHtml(html) {
     };
   };
 
-  const parseTableRows = (headingElement, cellKeys) => {
-    const table = headingElement?.nextElementSibling;
-    if (!table || table.tagName !== "TABLE") {
+  const parseTableRows = (tableElement, cellKeys) => {
+    if (!tableElement || tableElement.tagName !== "TABLE") {
       return [];
     }
 
-    const rows = Array.from(table.querySelectorAll("tr")).slice(1, 4);
-    return rows.map((row, index) => {
-      const cells = Array.from(row.querySelectorAll("td"));
-      const item = { index: index + 1 };
-      cellKeys.forEach((keys, cellIndex) => {
-        const rawText = normalizePreviewText(cells[cellIndex]?.textContent || "");
-        const parsed = parseMixedCell(rawText);
-        item[keys.zh] = parsed.zh;
-        item[keys.en] = parsed.en;
-        if (keys.raw) {
-          item[keys.raw] = rawText;
+    return Array.from(tableElement.querySelectorAll("tr"))
+      .slice(1)
+      .map((row, index) => {
+        const cells = Array.from(row.children).filter((cell) => /^(TD|TH)$/i.test(cell.tagName));
+        if (!cells.length) {
+          return null;
         }
-      });
-      return item;
-    });
+
+        const texts = cells.map((cell) => normalizePreviewText(cell.textContent || ""));
+        if (!texts.some(Boolean)) {
+          return null;
+        }
+
+        const item = { index: index + 1 };
+        cellKeys.forEach((keys, cellIndex) => {
+          const rawText = texts[cellIndex] || "";
+          const parsed = parseMixedCell(rawText);
+          item[keys.zh] = parsed.zh;
+          item[keys.en] = parsed.en;
+          if (keys.raw) {
+            item[keys.raw] = rawText;
+          }
+        });
+        return item;
+      })
+      .filter(Boolean);
+  };
+
+  const findTableByKeywords = (keywords = []) => {
+    const normalizedKeywords = keywords.map(normalizeEditorAlias).filter(Boolean);
+    return (
+      allTables.find((table) => {
+        const tableText = normalizeEditorAlias(normalizePreviewText(table.textContent || ""));
+        return normalizedKeywords.every((keyword) => tableText.includes(keyword));
+      }) || null
+    );
   };
 
   const shortFields = pairs.map((pair, index) => {
     const separated = splitMixedLanguageText(pair.value);
+    const meta = getStructuredShortFieldMetaFromLabel(pair.label);
     return {
-      key: `table-fallback-short-${index + 1}`,
-      label: pair.label,
+      key: meta?.key || `table-fallback-short-${index + 1}`,
+      label: meta?.label || pair.label,
       zh_text: separated.zh || pair.value,
       en_text: separated.en || "",
     };
   });
 
-  const workExperiences = parseTableRows(workHeading, [
+  const workExperiences = parseTableRows(
+    findTableByKeywords(["dates of employment", "organization", "position/title"]) ||
+      findTableByKeywords(["起止日期", "工作单位", "担任职务"]),
+    [
     { zh: "dates_zh", en: "dates_en", raw: "dates_display" },
     { zh: "organization_zh", en: "organization_en" },
     { zh: "position_zh", en: "position_en" },
-  ]);
+    ]
+  );
 
-  const educationExperiences = parseTableRows(educationHeading, [
+  const educationExperiences = parseTableRows(
+    findTableByKeywords(["dates of attendance", "institution", "field of study", "degree obtained"]) ||
+      findTableByKeywords(["起止日期", "毕业院校", "学习专业", "学历学位"]),
+    [
     { zh: "dates_zh", en: "dates_en", raw: "dates_display" },
     { zh: "institution_zh", en: "institution_en" },
     { zh: "course_zh", en: "course_en" },
     { zh: "degree_zh", en: "degree_en" },
-  ]);
+    ]
+  );
 
-  if (!pairs.length && !workExperiences.length && !educationExperiences.length) {
+  const previewLines = normalizePreviewText(html)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const longFieldDefinitions = [
+    { key: "introduction", label: "Introduction", test: /^(introduction|企业简介)$/i },
+    { key: "professionalexperience", label: "Professional Experience", test: /^(professional experience|个人职业经历)$/i },
+    { key: "programmotivation", label: "Program Motivation", test: /^(why do you want to join this program.*|您为什么想参加这个项目.*)$/i },
+    { key: "note", label: "Note", test: /^(note|备注)$/i },
+  ];
+  const longFields = longFieldDefinitions
+    .map((definition, index) => {
+      const startIndex = previewLines.findIndex((line) => definition.test.test(line));
+      if (startIndex < 0) {
+        return null;
+      }
+
+      const nextStartCandidates = longFieldDefinitions
+        .slice(index + 1)
+        .map((item) => previewLines.findIndex((line, lineIndex) => lineIndex > startIndex && item.test.test(line)))
+        .filter((value) => value > startIndex);
+      const nextStartIndex = nextStartCandidates.length ? Math.min(...nextStartCandidates) : previewLines.length;
+      const text = previewLines.slice(startIndex + 1, nextStartIndex).join("\n").trim();
+      if (!text) {
+        return null;
+      }
+
+      const separated = splitMixedLanguageText(text);
+      return {
+        key: definition.key,
+        label: definition.label,
+        zh_text: separated.zh || text,
+        en_text: separated.en || "",
+      };
+    })
+    .filter(Boolean);
+
+  if (!pairs.length && !workExperiences.length && !educationExperiences.length && !longFields.length) {
     return null;
   }
 
@@ -931,7 +1105,7 @@ function buildStructuredFallbackEditorFromPreviewHtml(html) {
     short_fields: shortFields,
     work_experiences: workExperiences,
     education_experiences: educationExperiences,
-    long_fields: [],
+    long_fields: longFields,
   };
 }
 
@@ -960,9 +1134,7 @@ function mergeMissingEditorField(targetEditor, fallbackEditor, sectionKey, alias
     }
 
     if (targetField) {
-      if (isEditorFieldEmpty(targetField)) {
-        setEditorMixedText(targetField, getEditorMixedText(fallbackField));
-      }
+      mergeEditorFieldValue(targetField, fallbackField);
       return;
     }
 
@@ -1006,17 +1178,7 @@ function mergeMissingStructuredEditorValues(targetEditor, fallbackEditor) {
       }
 
       fieldGroups.forEach(({ zh, en, raw }) => {
-        const targetText = getEditorRowMixedText(targetRows[index], zh, en, raw);
-        const fallbackText = getEditorRowMixedText(fallbackRow, zh, en, raw);
-        if (!String(targetText || "").trim() && String(fallbackText || "").trim()) {
-          setEditorRowMixedText(targetRows[index], zh, en, fallbackText);
-        }
-        if (raw?.length) {
-          const rawValue = getEditorObjectValue(fallbackRow, raw);
-          if (rawValue && !getEditorObjectValue(targetRows[index], raw)) {
-            setEditorObjectValue(targetRows[index], raw, rawValue);
-          }
-        }
+        mergeEditorRowValue(targetRows[index], fallbackRow, zh, en, raw);
       });
     });
 
@@ -1453,12 +1615,12 @@ function buildBilingualPreviewHtmlFromEditor(editor) {
     <div class="document-preview-sheet">
       <table>
         <tbody>
-          <tr><th colspan="4">Candidate Summary Sheet<br>候选人简表</th></tr>
+          <tr><th colspan="4">Candidate Summary Sheet<br>\u5019\u9009\u4eba\u7b80\u8868</th></tr>
           <tr><th colspan="4">Basic Information<br>基本信息</th></tr>
           <tr>
             <td>Name<br>姓名</td>
             <td>${escapeHtml(getEditorMixedText(nameField))}</td>
-            <td>Date of Birth<br>出生日期<br>（格式: 日/月/年）</td>
+            <td>Date of Birth<br>出生日期<br>（格式：日/月/年）</td>
             <td>${escapeHtml(getEditorMixedText(dobField))}</td>
           </tr>
           <tr>
@@ -1472,7 +1634,7 @@ function buildBilingualPreviewHtmlFromEditor(editor) {
             <td colspan="2">${escapeHtml(getEditorMixedText(organizationField))}</td>
             <td>Position<br>职务<br><br>${escapeHtml(getEditorMixedText(positionField))}</td>
           </tr>
-          <tr><th colspan="4">Company Profile<br>企业概况</th></tr>
+          <tr><th colspan="4">Company Profile<br>公司概况</th></tr>
           <tr>
             <td>Assets<br>总资产</td>
             <td>${escapeHtml(getEditorMixedText(assetsField))}</td>
@@ -1510,16 +1672,262 @@ function buildBilingualPreviewHtmlFromEditor(editor) {
           ${educationHtml}
         </tbody>
       </table>
-      ${block("Introduction", "企业简介", introductionField)}
+      ${block("Introduction", "\u4f01\u4e1a\u7b80\u4ecb", introductionField)}
       ${block("Professional Experience", "个人职业经历", professionalExperienceField)}
-      ${block("Why do you want to join this program, and what do you hope to gain from it?", "您为什么希望来参加本项目？您希望通过课程获得什么？", programMotivationField)}
+      ${block("Why do you want to join this program, and what do you hope to gain from it?", "您为什么想参加这个项目？", programMotivationField)}
       ${block("Note", "备注", noteField)}
     </div>
   `;
 }
 
+function normalizeEditorSnapshotText(value) {
+  return String(value || "").replace(/\r\n/g, "\n").trim();
+}
+
+function isEmptyEditorSnapshotValue(value) {
+  if (Array.isArray(value)) {
+    return value.every((item) => isEmptyEditorSnapshotValue(item));
+  }
+
+  if (isPlainObject(value)) {
+    return Object.values(value).every((item) => isEmptyEditorSnapshotValue(item));
+  }
+
+  return !normalizeEditorSnapshotText(value);
+}
+
+function normalizeGenericEditorSnapshotValue(value) {
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => normalizeGenericEditorSnapshotValue(item));
+    while (normalized.length && isEmptyEditorSnapshotValue(normalized[normalized.length - 1])) {
+      normalized.pop();
+    }
+    return normalized;
+  }
+
+  if (isPlainObject(value)) {
+    return Object.keys(value)
+      .sort()
+      .reduce((result, key) => {
+        result[key] = normalizeGenericEditorSnapshotValue(value[key]);
+        return result;
+      }, {});
+  }
+
+  return typeof value === "string" ? normalizeEditorSnapshotText(value) : value ?? "";
+}
+
+function buildStructuredEditorPersistenceSnapshot(editor) {
+  const snapshot = {
+    short_fields: {
+      name: normalizeEditorSnapshotText(
+        getEditorMixedText(getEditorFieldByAliasesFromEditor(editor, "short_fields", ["name", "full_name", "candidate_name", "applicantname", "姓名"]))
+      ),
+      date_of_birth: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "short_fields", [
+            "dateofbirth",
+            "date birth",
+            "date_of_birth",
+            "birthdate",
+            "dob",
+            "birthday",
+            "dateofbirthformatddmmyyyy",
+            "dateofbirthformatdaymonthyear",
+            "出生日期",
+            "生日",
+          ])
+        )
+      ),
+      gender: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "short_fields", [
+            "gender",
+            "sex",
+            "gendervalue",
+            "gender_value",
+            "gendermalefemale",
+            "sexmalefemale",
+            "性别",
+          ])
+        )
+      ),
+      nationality: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "short_fields", ["nationality", "citizenship", "country", "nationalitystatus", "国籍"])
+        )
+      ),
+      organization: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "short_fields", [
+            "organizationname",
+            "organization_name",
+            "companyname",
+            "company_name",
+            "company",
+            "organization",
+            "公司名称",
+          ])
+        )
+      ),
+      position: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "short_fields", ["position", "positiontitle", "title", "jobtitle", "job_position", "职务", "职位"])
+        )
+      ),
+      assets: normalizeEditorSnapshotText(
+        getEditorMixedText(getEditorFieldByAliasesFromEditor(editor, "short_fields", ["assets", "asset", "totalassets", "total_assets", "总资产"]))
+      ),
+      employees: normalizeEditorSnapshotText(
+        getEditorMixedText(getEditorFieldByAliasesFromEditor(editor, "short_fields", ["employees", "employee", "staff", "staffcount", "employeecount", "员工人数"]))
+      ),
+      revenue: normalizeEditorSnapshotText(
+        getEditorMixedText(getEditorFieldByAliasesFromEditor(editor, "short_fields", ["revenue", "turnover", "income", "annualrevenue", "营收", "营业收入", "企业营收"]))
+      ),
+      industry: normalizeEditorSnapshotText(
+        getEditorMixedText(getEditorFieldByAliasesFromEditor(editor, "short_fields", ["industry", "businessindustry", "companyindustry", "行业", "公司行业"]))
+      ),
+    },
+    long_fields: {
+      introduction: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "long_fields", ["introduction", "companyintroduction", "company_profile", "companyprofile"])
+        )
+      ),
+      professional_experience: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "long_fields", ["professionalexperience", "individualexperience", "careerhistory", "workexperience", "个人职业经历"])
+        )
+      ),
+      program_motivation: normalizeEditorSnapshotText(
+        getEditorMixedText(
+          getEditorFieldByAliasesFromEditor(editor, "long_fields", [
+            "programmotivation",
+            "program_motivation",
+            "motivation",
+            "reason",
+            "program_reason",
+            "whydoyouwanttojointhisprogramandwhatdoyouhopetogainfromit",
+            "您为什么想参加这个项目？",
+          ])
+        )
+      ),
+      note: normalizeEditorSnapshotText(
+        getEditorMixedText(getEditorFieldByAliasesFromEditor(editor, "long_fields", ["note", "remark", "remarks", "memo", "备注"]))
+      ),
+    },
+    work_experiences: (editor?.work_experiences || [])
+      .map((item) => ({
+        dates: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["dates_zh", "date_zh", "dates_of_employment_zh", "employment_dates_zh", "dates_of_employment"], ["dates_en", "date_en", "dates_of_employment_en", "employment_dates_en"], ["dates_display"])
+        ),
+        organization: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["organization_zh", "organization", "company_zh"], ["organization_en", "organization_en_text", "company_en"])
+        ),
+        position: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["position_zh", "position_title_zh", "title_zh"], ["position_en", "position_title_en", "title_en"])
+        ),
+      }))
+      .filter((item) => !isEmptyEditorSnapshotValue(item)),
+    education_experiences: (editor?.education_experiences || [])
+      .map((item) => ({
+        dates: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["dates_zh", "date_zh", "dates_of_attendance_zh", "attendance_dates_zh", "dates_of_attendance"], ["dates_en", "date_en", "dates_of_attendance_en", "attendance_dates_en"], ["dates_display"])
+        ),
+        institution: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["institution_zh", "school_zh"], ["institution_en", "school_en"])
+        ),
+        course: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["course_zh", "field_of_study_zh", "major_zh"], ["course_en", "field_of_study_en", "major_en"])
+        ),
+        degree: normalizeEditorSnapshotText(
+          getEditorRowMixedText(item, ["degree_zh", "degree_obtained_zh"], ["degree_en", "degree_obtained_en"])
+        ),
+      }))
+      .filter((item) => !isEmptyEditorSnapshotValue(item)),
+  };
+
+  return snapshot;
+}
+
+function buildEditorPersistenceSnapshot(editor) {
+  const normalizedEditor = normalizeEditorPayloadForSave(editor || {});
+  const snapshot = {};
+
+  if (hasStructuredBilingualEditorPayload(normalizedEditor)) {
+    snapshot.structured = buildStructuredEditorPersistenceSnapshot(normalizedEditor);
+  }
+
+  const genericSections = Object.entries(normalizedEditor || {})
+    .filter(([key, value]) => !structuredEditorSectionKeys.includes(key) && value !== null && value !== undefined)
+    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+    .reduce((result, [key, value]) => {
+      result[key] = normalizeGenericEditorSnapshotValue(value);
+      return result;
+    }, {});
+
+  if (Object.keys(genericSections).length) {
+    snapshot.generic = genericSections;
+  }
+
+  return snapshot;
+}
+
+function serializeEditorSnapshot(editor) {
+  return JSON.stringify(buildEditorPersistenceSnapshot(editor));
+}
+
+function syncEditorInitialSnapshot(editor) {
+  editorInitialSnapshot.value = serializeEditorSnapshot(editor);
+}
+
+function hasUnsavedEditorChanges() {
+  if (!editingDocumentId.value) {
+    return false;
+  }
+
+  const editableEl = getEditorEditableElement();
+  if (!editableEl) {
+    return false;
+  }
+
+  return normalizeEditorSnapshotText(editableEl.innerHTML) !== editorInitialSnapshot.value;
+}
+
+function getEditorEditableElement() {
+  return editorDialog.value?.querySelector?.("#bilingual-preview-content") || null;
+}
+
+async function loadBilingualPreview(documentId) {
+  const result = await previewDocument(documentId);
+  const data = result?.data || {};
+
+  if (!data?.html) {
+    throw new Error(currentUiLanguage.value === "en-US" ? "Server did not return preview HTML." : "后端未返回双语预览 HTML。");
+  }
+
+  return data;
+}
+
+function resolveBilingualSavePayload(result) {
+  if (!result?.success) {
+    throw new Error(result?.message || (currentUiLanguage.value === "en-US" ? "Failed to save bilingual document." : "保存双语简表失败。"));
+  }
+
+  return result?.data || {};
+}
+
+async function syncEditorInitialHtmlSnapshot() {
+  await nextTick();
+  editorInitialSnapshot.value = normalizeEditorSnapshotText(getEditorEditableElement()?.innerHTML || "");
+}
+
 function closePreviewDialog() {
   closeDialogWithAnimation(previewDialog);
+}
+
+function togglePreviewDialogFullscreen() {
+  previewDialogFullscreen.value = !previewDialogFullscreen.value;
 }
 
 function closeConfirmDialog() {
@@ -1527,12 +1935,43 @@ function closeConfirmDialog() {
 }
 
 function closeEditorDialog() {
+  if (editorSaving.value || editorLoading.value) {
+    return;
+  }
+
+  if (hasUnsavedEditorChanges()) {
+    openDialogWithAnimation(editorCloseConfirmDialog, {
+      originPoint: {
+        x: window.innerWidth * 0.76,
+        y: window.innerHeight * 0.2,
+      },
+    });
+    return;
+  }
+
   closeDialogWithAnimation(editorDialog);
+}
+
+function closeEditorCloseConfirmDialog() {
+  if (editorCloseConfirmDialog.value?.open) {
+    closeDialogWithAnimation(editorCloseConfirmDialog);
+  }
+}
+
+function confirmCloseEditorDialog() {
+  closeEditorCloseConfirmDialog();
+  closeDialogWithAnimation(editorDialog);
+}
+
+function toggleEditorDialogFullscreen() {
+  editorDialogFullscreen.value = !editorDialogFullscreen.value;
 }
 
 function resetPreviewDialogState() {
   activeSubDialog.value = "";
   previewHtml.value = "";
+  previewStructuredData.value = null;
+  previewDialogFullscreen.value = false;
 }
 
 function resetConfirmDialogState() {
@@ -1548,7 +1987,11 @@ function resetEditorDialogState() {
   editorSaving.value = false;
   editorData.value = null;
   editorPreviewFallback.value = null;
+  editorHtml.value = "";
+  editorCanEdit.value = false;
   editingDocumentId.value = null;
+  editorInitialSnapshot.value = "";
+  editorDialogFullscreen.value = false;
 }
 
 function delay(ms) {
@@ -1763,6 +2206,7 @@ async function handleUpload(event) {
 
 async function handlePreview(documentId, event) {
   previewHtml.value = "";
+  previewStructuredData.value = null;
   previewTitle.value = t("document.previewTitle");
   previewLoading.value = true;
   activeSubDialog.value = "preview";
@@ -1780,6 +2224,10 @@ async function handlePreview(documentId, event) {
     if (isOnlineSummaryDocument(targetDocument)) {
       const result = await getOnlineSummaryDetail(documentId);
       previewHtml.value = buildOnlineSummaryPreviewHtmlTemplate(result?.data || {});
+    } else if (targetDocument?.document_kind === "bilingual") {
+      const data = await loadBilingualPreview(documentId);
+      previewHtml.value = String(data.html || cachedPreviewHtml || "");
+      setCachedResource(getPreviewCacheKey(data.document_id || documentId), previewHtml.value);
     } else {
       const result = await previewDocument(documentId);
       const html = String(result?.data?.html || "");
@@ -1789,19 +2237,7 @@ async function handlePreview(documentId, event) {
         !/<table[\s>]/i.test(html) ||
         (/^name\s*:/i.test(normalizedPreview) && /^assets\s*:/im.test(normalizedPreview));
 
-      if (targetDocument?.document_kind === "bilingual" && cachedEditor) {
-        previewHtml.value = buildBilingualPreviewHtmlFromEditor(cachedEditor) || cachedPreviewHtml || html;
-      } else if (targetDocument?.document_kind === "bilingual" && looksPlainTextFallback) {
-        const editorResult = await getBilingualEditor(documentId);
-        const fallbackPreviewHtml = buildBilingualPreviewHtmlFromEditor(editorResult?.data?.editor || null);
-        previewHtml.value = fallbackPreviewHtml || cachedPreviewHtml || html;
-      } else {
-        previewHtml.value = html || cachedPreviewHtml || "";
-      }
-
-      if (targetDocument?.document_kind === "bilingual" && previewHtml.value) {
-        setCachedResource(getPreviewCacheKey(documentId), previewHtml.value);
-      }
+      previewHtml.value = html || cachedPreviewHtml || (cachedEditor ? buildBilingualPreviewHtmlFromEditor(cachedEditor) : "");
     }
   } catch (error) {
     previewDialog.value?.close();
@@ -1863,6 +2299,7 @@ async function executeGenerateBilingual() {
 
   const documentId = confirmDocumentId.value;
   const previousSignature = getBilingualDocumentSignature(documents.value);
+  let generatedBilingualDocumentId = null;
   let completed = false;
   actionBusyId.value = `generate-${documentId}`;
   persistGenerateState({
@@ -1874,7 +2311,8 @@ async function executeGenerateBilingual() {
   });
   startGenerateProgress(8, 88);
   try {
-    await generateBilingualDocument(documentId);
+    const result = await generateBilingualDocument(documentId);
+    generatedBilingualDocumentId = result?.data?.document?.id || null;
     startGenerateFinalizeProgress();
     const { confirmed } = await waitForBilingualDocument(previousSignature);
     if (!confirmed) {
@@ -1884,6 +2322,10 @@ async function executeGenerateBilingual() {
     persistGenerateState({ progress: 100, phase: "done" });
     await delay(280);
     completed = true;
+    if (generatedBilingualDocumentId) {
+      clearCachedResource(getPreviewCacheKey(generatedBilingualDocumentId));
+      clearCachedResource(getEditorCacheKey(generatedBilingualDocumentId));
+    }
     emit("updated");
   } catch (error) {
     errorMessage.value = error.message || t("document.generateFailed");
@@ -1932,6 +2374,9 @@ async function openBilingualEditor(documentId, event) {
   editorLoading.value = true;
   editorData.value = null;
   editorPreviewFallback.value = null;
+  editorHtml.value = "";
+  editorCanEdit.value = false;
+  editorInitialSnapshot.value = "";
   editingDocumentId.value = documentId;
   activeSubDialog.value = "editor";
   openDialogWithAnimation(editorDialog, {
@@ -1942,27 +2387,12 @@ async function openBilingualEditor(documentId, event) {
   });
 
   try {
-    const result = await getBilingualEditor(documentId);
-    const backendEditor = result?.data?.editor || null;
-    const cachedEditor = getCachedResource(getEditorCacheKey(documentId));
-    const previewResult = await previewDocument(documentId);
-    const previewHtml = previewResult?.data?.html || "";
-    const previewFallback =
-      buildStructuredFallbackEditorFromPreviewHtml(previewHtml) ||
-      buildFallbackEditorFromPreviewHtml(
-        previewHtml,
-        result?.data?.document?.original_filename || editingDocumentInfo.value?.original_filename || t("document.editorTitle")
-    );
-    editorPreviewFallback.value = previewFallback;
-
-    const preferredEditor = cachedEditor || backendEditor;
-
-    if (hasMeaningfulStructuredContent(preferredEditor)) {
-      editorData.value = mergeMissingStructuredEditorValues(preferredEditor, previewFallback);
-      return;
-    }
-
-    editorData.value = previewFallback || preferredEditor;
+    const data = await loadBilingualPreview(documentId);
+    editingDocumentId.value = data.document_id || documentId;
+    editorCanEdit.value = Boolean(data.can_edit);
+    editorHtml.value = String(data.html || "");
+    setCachedResource(getPreviewCacheKey(editingDocumentId.value), editorHtml.value);
+    await syncEditorInitialHtmlSnapshot();
   } catch (error) {
     editorDialog.value?.close();
     errorMessage.value = error.message || t("document.editorLoadFailed");
@@ -1972,26 +2402,36 @@ async function openBilingualEditor(documentId, event) {
 }
 
 async function handleSaveEditor() {
-  if (!editingDocumentId.value || !editorData.value) return;
+  if (!editingDocumentId.value) return;
+
+  if (!editorCanEdit.value) {
+    errorMessage.value = currentUiLanguage.value === "en-US" ? "You do not have permission to edit this bilingual document." : "当前用户无权编辑双语简表。";
+    return;
+  }
+
+  const editableEl = getEditorEditableElement();
+  if (!editableEl) {
+    errorMessage.value = currentUiLanguage.value === "en-US" ? "Editable bilingual content was not found." : "未找到可编辑的双语内容区域。";
+    return;
+  }
 
   editorSaving.value = true;
 
   try {
-    const payload = normalizeEditorPayloadForSave(editorData.value);
-    const result = await saveBilingualEditor(editingDocumentId.value, payload);
-    const nextEditor = payload;
-    editorData.value = nextEditor;
-    setCachedResource(getEditorCacheKey(editingDocumentId.value), nextEditor);
-    const nextPreviewHtml = buildBilingualPreviewHtmlFromEditor(nextEditor);
-    if (nextPreviewHtml) {
-      previewHtml.value = nextPreviewHtml;
-      setCachedResource(getPreviewCacheKey(editingDocumentId.value), nextPreviewHtml);
+    const saveData = resolveBilingualSavePayload(
+      await saveBilingualEditor(editingDocumentId.value, editableEl.innerHTML)
+    );
+    const data = await loadBilingualPreview(editingDocumentId.value);
+    if (saveData.content_hash && data.content_hash && saveData.content_hash !== data.content_hash) {
+      console.warn("Bilingual save content hash mismatch between save response and preview response.");
     }
+    editingDocumentId.value = data.document_id || editingDocumentId.value;
+    editorCanEdit.value = Boolean(data.can_edit);
+    editorHtml.value = String(data.html || "");
+    setCachedResource(getPreviewCacheKey(editingDocumentId.value), editorHtml.value);
+    await syncEditorInitialHtmlSnapshot();
     await fetchDocumentsFresh();
     emit("updated");
-    closeDialogWithAnimation(editorDialog, {
-      afterClose: () => {},
-    });
   } catch (error) {
     errorMessage.value = error.message || t("document.editorSaveFailed");
   } finally {
@@ -2013,6 +2453,7 @@ onBeforeUnmount(() => {
   resetDialogMotion(confirmDialog);
   resetDialogMotion(previewDialog);
   resetDialogMotion(editorDialog);
+  resetDialogMotion(editorCloseConfirmDialog);
 });
 </script>
 
@@ -2096,12 +2537,17 @@ onBeforeUnmount(() => {
       </div>
     </dialog>
 
-    <dialog ref="previewDialog" class="modal-dialog document-preview-dialog" @close="resetPreviewDialogState">
+    <dialog ref="previewDialog" class="modal-dialog document-preview-dialog" :class="{ 'is-fullscreen': previewDialogFullscreen }" @close="resetPreviewDialogState">
       <div class="modal-shell document-preview-dialog-shell">
         <div class="modal-surface document-preview-dialog-surface">
           <div class="panel-header modal-header document-preview-dialog-header">
             <h3>{{ previewTitle }}</h3>
-            <button class="btn btn-secondary" type="button" @click="closePreviewDialog">{{ t("common.close") }}</button>
+            <div class="form-actions document-preview-dialog-header-actions">
+              <button class="btn btn-secondary document-preview-toggle-btn" type="button" @click="togglePreviewDialogFullscreen">
+                {{ previewDialogToggleLabel }}
+              </button>
+              <button class="btn btn-secondary" type="button" @click="closePreviewDialog">{{ t("common.close") }}</button>
+            </div>
           </div>
           <div class="panel-body stack-form modal-body document-preview-dialog-body">
             <div v-if="previewLoading" class="modal-note">{{ t("common.loading") }}</div>
@@ -2111,314 +2557,53 @@ onBeforeUnmount(() => {
       </div>
     </dialog>
 
-    <dialog ref="editorDialog" class="modal-dialog document-editor-dialog" @close="resetEditorDialogState">
+    <dialog
+      ref="editorDialog"
+      class="modal-dialog document-editor-dialog"
+      :class="{ 'is-fullscreen': editorDialogFullscreen }"
+      @cancel.prevent="closeEditorDialog"
+      @close="resetEditorDialogState"
+    >
       <div class="modal-shell document-editor-dialog-shell">
         <div class="modal-surface document-editor-dialog-surface">
           <div class="panel-header modal-header document-editor-dialog-header">
             <h3>{{ editorDialogTitle }}</h3>
             <div class="form-actions document-editor-dialog-header-actions">
-              <button class="btn btn-primary" type="button" :disabled="editorSaving || editorLoading || !editorData" @click="handleSaveEditor">
+              <button class="btn btn-secondary document-preview-toggle-btn" type="button" @click="toggleEditorDialogFullscreen">
+                {{ editorDialogToggleLabel }}
+              </button>
+              <button class="btn btn-primary" type="button" :disabled="editorSaving || editorLoading || !editorHtml || !editorCanEdit" @click="handleSaveEditor">
                 {{ editorSaving ? t("document.saving") : t("document.save") }}
               </button>
-              <button class="btn btn-secondary" type="button" @click="closeEditorDialog">{{ t("common.close") }}</button>
+              <button class="btn btn-secondary" type="button" :disabled="editorSaving || editorLoading" @click="closeEditorDialog">{{ t("common.close") }}</button>
             </div>
           </div>
           <div class="panel-body stack-form modal-body document-editor-dialog-body">
             <div v-if="editorLoading" class="modal-note">{{ t("common.loading") }}</div>
-            <template v-else-if="editorData">
-              <template v-if="hasStructuredEditorSections">
-                <div class="document-preview-html document-editor-preview">
-                  <h2>Candidate Summary Sheet<br />候选人简表</h2>
-
-                  <table class="document-editor-preview-table document-editor-preview-table--work">
-                    <tbody>
-                      <tr>
-                        <th colspan="4">Basic Information<br />基本信息</th>
-                      </tr>
-                      <tr>
-                        <td>Name<br />姓名</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.name)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.name, $event.target.value)"
-                          />
-                        </td>
-                        <td>Date of Birth<br />出生日期</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.dateOfBirth)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.dateOfBirth, $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td>Gender<br />性别</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.gender)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.gender, $event.target.value)"
-                          />
-                        </td>
-                        <td>Nationality<br />国籍</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.nationality)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.nationality, $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td>Organization Name<br />公司名称</td>
-                        <td colspan="2">
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.organization)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.organization, $event.target.value)"
-                          />
-                        </td>
-                        <td>
-                          <div class="document-editor-preview-label">Position<br />职务</div>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.position)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.position, $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <th colspan="4">Company Profile<br />企业概况</th>
-                      </tr>
-                      <tr>
-                        <td>Assets<br />总资产</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.assets)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.assets, $event.target.value)"
-                          />
-                        </td>
-                        <td>Employees<br />员工人数</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.employees)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.employees, $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td>Revenue<br />企业营收</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.revenue)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.revenue, $event.target.value)"
-                          />
-                        </td>
-                        <td>Industry<br />公司行业</td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorMixedText(resolvedStructuredBilingualSheet.industry)"
-                            @input="setEditorMixedText(resolvedStructuredBilingualSheet.industry, $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <h3>Work Experience<br />工作经历</h3>
-                  <table>
-                    <tbody>
-                      <tr>
-                        <th>Dates of Employment<br />起止日期（年/月）</th>
-                        <th>Organization<br />工作单位</th>
-                        <th>Position/Title<br />担任职务</th>
-                      </tr>
-                      <tr
-                        v-for="(item, index) in resolvedStructuredBilingualSheet.workExperiences"
-                        :key="`work-${item.index || getEditorObjectValue(item, ['organization_zh', 'organization', 'company_zh']) || getEditorObjectValue(item, ['organization_en', 'organization_en_text', 'company_en'])}`"
-                      >
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorDateDisplayText(item, editorPreviewFallback?.work_experiences?.[index], ['dates_zh', 'date_zh', 'dates_of_employment_zh', 'employment_dates_zh', 'dates_of_employment'], ['dates_en', 'date_en', 'dates_of_employment_en', 'employment_dates_en'], ['dates_display'])"
-                            @input="setEditorRowMixedText(item, ['dates_zh', 'date_zh', 'dates_of_employment_zh', 'employment_dates_zh', 'dates_of_employment'], ['dates_en', 'date_en', 'dates_of_employment_en', 'employment_dates_en'], $event.target.value, ['dates_display'])"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorRowMixedText(item, ['organization_zh', 'organization', 'company_zh'], ['organization_en', 'organization_en_text', 'company_en'])"
-                            @input="setEditorRowMixedText(item, ['organization_zh', 'organization', 'company_zh'], ['organization_en', 'organization_en_text', 'company_en'], $event.target.value)"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorRowMixedText(item, ['position_zh', 'position_title_zh', 'title_zh'], ['position_en', 'position_title_en', 'title_en'])"
-                            @input="setEditorRowMixedText(item, ['position_zh', 'position_title_zh', 'title_zh'], ['position_en', 'position_title_en', 'title_en'], $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <h3>Educational Background<br />教育经历</h3>
-                  <table>
-                    <tbody>
-                      <tr>
-                        <th>Dates of Attendance<br />起止日期</th>
-                        <th>Institution<br />毕业院校</th>
-                        <th>Field of Study<br />学习专业</th>
-                        <th>Degree Obtained<br />学历/学位</th>
-                      </tr>
-                      <tr
-                        v-for="(item, index) in resolvedStructuredBilingualSheet.educationExperiences"
-                        :key="`edu-${item.index || getEditorObjectValue(item, ['institution_zh', 'school_zh']) || getEditorObjectValue(item, ['institution_en', 'school_en'])}`"
-                      >
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorDateDisplayText(item, editorPreviewFallback?.education_experiences?.[index], ['dates_zh', 'date_zh', 'dates_of_attendance_zh', 'attendance_dates_zh', 'dates_of_attendance'], ['dates_en', 'date_en', 'dates_of_attendance_en', 'attendance_dates_en'], ['dates_display'])"
-                            @input="setEditorRowMixedText(item, ['dates_zh', 'date_zh', 'dates_of_attendance_zh', 'attendance_dates_zh', 'dates_of_attendance'], ['dates_en', 'date_en', 'dates_of_attendance_en', 'attendance_dates_en'], $event.target.value, ['dates_display'])"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorRowMixedText(item, ['institution_zh', 'school_zh'], ['institution_en', 'school_en'])"
-                            @input="setEditorRowMixedText(item, ['institution_zh', 'school_zh'], ['institution_en', 'school_en'], $event.target.value)"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorRowMixedText(item, ['course_zh', 'field_of_study_zh', 'major_zh'], ['course_en', 'field_of_study_en', 'major_en'])"
-                            @input="setEditorRowMixedText(item, ['course_zh', 'field_of_study_zh', 'major_zh'], ['course_en', 'field_of_study_en', 'major_en'], $event.target.value)"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            class="document-editor-preview-input document-editor-preview-input--single"
-                            :value="getEditorRowMixedText(item, ['degree_zh', 'degree_obtained_zh'], ['degree_en', 'degree_obtained_en'])"
-                            @input="setEditorRowMixedText(item, ['degree_zh', 'degree_obtained_zh'], ['degree_en', 'degree_obtained_en'], $event.target.value)"
-                          />
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <h3>Introduction<br />企业简介</h3>
-                  <div class="document-editor-preview-block">
-                    <textarea
-                      class="document-editor-preview-textarea document-editor-preview-textarea--single"
-                      :value="getEditorMixedText(resolvedStructuredBilingualSheet.introduction)"
-                      rows="8"
-                      @input="setEditorMixedText(resolvedStructuredBilingualSheet.introduction, $event.target.value)"
-                    />
-                  </div>
-
-                  <h3>Professional Experience<br />个人职业经历</h3>
-                  <div class="document-editor-preview-block">
-                    <textarea
-                      class="document-editor-preview-textarea document-editor-preview-textarea--single"
-                      :value="getEditorMixedText(resolvedStructuredBilingualSheet.professionalExperience)"
-                      rows="8"
-                      @input="setEditorMixedText(resolvedStructuredBilingualSheet.professionalExperience, $event.target.value)"
-                    />
-                  </div>
-
-                  <h3>Why do you want to join this program, and what do you hope to gain from it?<br />您为什么希望来参加本项目？</h3>
-                  <div class="document-editor-preview-block">
-                    <textarea
-                      class="document-editor-preview-textarea document-editor-preview-textarea--single"
-                      :value="getEditorMixedText(resolvedStructuredBilingualSheet.programMotivation)"
-                      rows="8"
-                      @input="setEditorMixedText(resolvedStructuredBilingualSheet.programMotivation, $event.target.value)"
-                    />
-                  </div>
-
-                  <h3>Note<br />备注</h3>
-                  <div class="document-editor-preview-block">
-                    <textarea
-                      class="document-editor-preview-textarea document-editor-preview-textarea--single"
-                      :value="getEditorMixedText(resolvedStructuredBilingualSheet.note)"
-                      rows="6"
-                      @input="setEditorMixedText(resolvedStructuredBilingualSheet.note, $event.target.value)"
-                    />
-                  </div>
-                </div>
-              </template>
-
-              <template v-else>
-                <div v-for="item in editorData.short_fields || []" :key="item.key" class="bilingual-row">
-                  <div class="bilingual-head"><strong>{{ item.label }}</strong></div>
-                  <div class="bilingual-columns">
-                    <label class="field-block"><span>{{ t("document.cn") }}</span><input :value="item.zh_text" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.en") }}</span><input v-model="item.en_text" /></label>
-                  </div>
-                </div>
-
-                <div v-for="item in editorData.work_experiences || []" :key="`work-${item.index}`" class="bilingual-editor-block">
-                  <strong>{{ t("document.workExperience", { index: item.index }) }}</strong>
-                  <div class="bilingual-columns">
-                    <label class="field-block"><span>{{ t("document.companyZh") }}</span><input :value="item.organization_zh" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.companyEn") }}</span><input v-model="item.organization_en" /></label>
-                    <label class="field-block"><span>{{ t("document.positionZh") }}</span><input :value="item.position_zh" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.positionEn") }}</span><input v-model="item.position_en" /></label>
-                  </div>
-                </div>
-
-                <div v-for="item in editorData.education_experiences || []" :key="`edu-${item.index}`" class="bilingual-editor-block">
-                  <strong>{{ t("document.educationExperience", { index: item.index }) }}</strong>
-                  <div class="bilingual-columns">
-                    <label class="field-block"><span>{{ t("document.schoolZh") }}</span><input :value="item.institution_zh" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.schoolEn") }}</span><input v-model="item.institution_en" /></label>
-                    <label class="field-block"><span>{{ t("document.courseZh") }}</span><input :value="item.course_zh" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.courseEn") }}</span><input v-model="item.course_en" /></label>
-                    <label class="field-block"><span>{{ t("document.degreeZh") }}</span><input :value="item.degree_zh" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.degreeEn") }}</span><input v-model="item.degree_en" /></label>
-                  </div>
-                </div>
-
-                <div v-for="item in editorData.long_fields || []" :key="item.key" class="bilingual-row">
-                  <div class="bilingual-head"><strong>{{ item.label }}</strong></div>
-                  <div class="bilingual-columns">
-                    <label class="field-block"><span>{{ t("document.cn") }}</span><textarea :value="item.zh_text" rows="8" readonly /></label>
-                    <label class="field-block"><span>{{ t("document.en") }}</span><textarea v-model="item.en_text" rows="8" /></label>
-                  </div>
-                </div>
-              </template>
-
-              <div
-                v-for="section in genericEditorSections"
-                :key="section.key"
-                class="bilingual-editor-block bilingual-editor-block--generic"
-              >
-                <strong>{{ section.title }}</strong>
-                <div v-for="block in section.blocks" :key="block.key" class="bilingual-row">
-                  <div class="bilingual-head"><strong>{{ block.title }}</strong></div>
-                  <div class="bilingual-columns">
-                    <label v-for="field in block.fields" :key="field.key" class="field-block">
-                      <span>{{ field.label }}</span>
-                      <textarea
-                        v-if="field.control === 'textarea'"
-                        v-model="field.holder[field.prop]"
-                        rows="8"
-                      />
-                      <input v-else v-model="field.holder[field.prop]" />
-                    </label>
-                  </div>
-                </div>
-              </div>
-
+            <template v-else-if="editorHtml">
+              <p v-if="!editorCanEdit" class="muted-text">
+                {{ currentUiLanguage === "en-US" ? "This bilingual preview is read-only." : "当前双语预览不可编辑。" }}
+              </p>
+              <div class="docx-preview-content document-preview-html" v-html="editorHtml" />
             </template>
             <EmptyState v-else :title="t('feedback.noData')" />
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog ref="editorCloseConfirmDialog" class="modal-dialog document-confirm-dialog" @close="() => {}">
+      <div class="modal-shell document-confirm-dialog-shell">
+        <div class="modal-surface document-confirm-dialog-surface">
+          <div class="panel-header modal-header document-confirm-dialog-header">
+            <h3>{{ editorCloseConfirmTitle }}</h3>
+          </div>
+          <div class="panel-body stack-form modal-body document-confirm-dialog-body">
+            <p class="document-confirm-copy">{{ editorCloseConfirmBody }}</p>
+            <div class="form-actions document-confirm-actions">
+              <button class="btn btn-primary" type="button" @click="confirmCloseEditorDialog">{{ t("common.confirm") }}</button>
+              <button class="btn btn-secondary" type="button" @click="closeEditorCloseConfirmDialog">{{ t("common.cancel") }}</button>
+            </div>
           </div>
         </div>
       </div>

@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import bossKnowLogo from "../assets/boss-know-logo.png";
+import CodeFlowBackdrop from "../components/CodeFlowBackdrop.vue";
 import DocumentManager from "../components/DocumentManager.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
@@ -12,14 +13,16 @@ import UiSelect from "../components/UiSelect.vue";
 import { fetchCurrentUser } from "../api/auth.js";
 import { createOnlineSummary, downloadDocument, getOnlineSummaryDetail, listEntryDocuments, previewDocument, updateOnlineSummary } from "../api/documents.js";
 import { createEntry, deleteEntry, listReviews, moveEntrySlot, saveReview, updateEntry } from "../api/entries.js";
-import { getFormTable, getSimpleDesigner, saveSimpleDesigner } from "../api/forms.js";
+import { getFormEntryReviews, getFormTable, getSimpleDesigner, saveSimpleDesigner } from "../api/forms.js";
+import { fetchInterviewerProfile, updateInterviewerProfile } from "../api/interviewerProfile.js";
 import { getCachedResource, setCachedResource } from "../stores/resourceCache.js";
 import { currentUiLanguage, t } from "../stores/uiLanguage.js";
 import { closeDialogWithAnimation, getDialogOriginFromEvent, openDialogWithAnimation, resetDialogMotion } from "../utils/dialogMotion.js";
-import { buildValueSummary, getEntryStatusLabel, getFormStatusLabel, getReviewResultLabel } from "../utils/format.js";
+import { buildValueSummary, formatDateTime, getEntryStatusLabel, getFormStatusLabel, getReviewResultLabel } from "../utils/format.js";
 import { buildOnlineSummaryPreviewHtml, downloadOnlineSummaryAsWord } from "../utils/onlineSummaryDocument.js";
 
 const route = useRoute();
+const router = useRouter();
 const formId = computed(() => route.params.id);
 
 const currentUser = ref(null);
@@ -36,36 +39,66 @@ const simpleFormValues = ref({});
 const simpleFormDocumentId = ref(null);
 const simpleFormLoading = ref(false);
 const simpleFormPreviewDialog = ref(null);
+const simpleFormPreviewConfirmDialog = ref(null);
 const simpleFormPreviewLoading = ref(false);
 const simpleFormPreviewHtml = ref("");
+const simpleFormPreviewFullscreen = ref(false);
 const documentRow = ref(null);
 const documentSimpleFillVisible = ref(false);
 const documentDialog = ref(null);
+const currentOperatorDialog = ref(null);
+const currentOperatorNameValue = ref("");
+const currentOperatorNameError = ref("");
+const currentOperatorNameSubmitting = ref(false);
+const currentOperatorDialogMode = ref("required");
+const interviewerProfileState = ref({
+  accountRealName: "",
+  currentOperatorName: "",
+  hasCurrentOperatorName: false,
+});
 const interviewerReviewDialog = ref(null);
 const interviewerPreviewLoading = ref(false);
 const interviewerPreviewHtml = ref("");
+const interviewerPreviewFullscreen = ref(false);
 const interviewerReviewLoading = ref(false);
 const interviewerReviewSaving = ref(false);
 const interviewerReviewRow = ref(null);
 const interviewerReviewResult = ref("pending");
 const interviewerReviewComment = ref("");
+const interviewerReviewItems = ref([]);
+const reviewStatusDialog = ref(null);
+const reviewStatusLoading = ref(false);
+const reviewStatusRow = ref(null);
+const reviewStatusItems = ref([]);
+const reviewStatusSummary = ref({
+  candidateName: "",
+  teamName: "",
+  evaluatedCount: 0,
+  totalInterviewerCount: null,
+});
 const deletingEntry = ref(false);
 const deleteDialog = ref(null);
 const deletingRow = ref(null);
 const moveSlotDialog = ref(null);
 const movingRow = ref(null);
 const targetSlotId = ref("");
-const disabledSlotTitles = ref([]);
 const designerConfig = ref(null);
 const togglingDisabledSlot = ref(false);
 const isAdminViewer = computed(() => ["super_admin", "academic_admin"].includes(currentUser.value?.role || ""));
 const canViewInterviewDetail = computed(() => isInterviewer.value || isAdminViewer.value);
+const canTrackDocumentUpload = computed(() => canViewInterviewDetail.value || isPersonalUser.value);
+const canViewReviewStatusDetail = computed(() => isInterviewer.value || isAdminViewer.value || isPersonalUser.value);
 const canEditInterviewReview = computed(() => isInterviewer.value);
+const showRecentUpdatedColumn = computed(() => isAdminViewer.value);
 const tableCacheKey = computed(() => `forms:table:${formId.value}:${currentUiLanguage.value}`);
+const currentOperatorPromptStorageKey = computed(() => {
+  const identity = currentUser.value?.id || currentUser.value?.user_id || currentUser.value?.username || "anonymous";
+  return `forms:current-operator-prompt:${identity}:${formId.value}`;
+});
 const isInterviewer = computed(() => currentUser.value?.role === "interviewer");
 const isPersonalUser = computed(() => currentUser.value?.role === "personal");
 const showStatusColumn = computed(() => !isInterviewer.value);
-const documentActionLabel = computed(() => (isInterviewer.value ? (currentUiLanguage.value === "en-US" ? "View" : "查看") : t("fill.resume")));
+const documentActionLabel = computed(() => (isInterviewer.value ? (currentUiLanguage.value === "en-US" ?  "View" : "查看") : currentUiLanguage.value === "en-US" ? "View" : "查看"));
 const interviewerDocumentNote = computed(() =>
   currentUiLanguage.value === "en-US"
     ? "Blue outline means no resume has been uploaded yet. Green outline means a resume has already been uploaded and can be viewed."
@@ -74,8 +107,10 @@ const interviewerDocumentNote = computed(() =>
 const documentUploadStateMap = ref({});
 const entryDocumentsMap = ref({});
 const reviewResultStateMap = ref({});
+const reviewSummaryMap = ref({});
 const reviewResultOptions = computed(() => [
   { value: "pending", label: getReviewResultLabel("pending") },
+  { value: "in_progress", label: getReviewResultLabel("in_progress") },
   { value: "pass", label: getReviewResultLabel("pass") },
   { value: "reject", label: getReviewResultLabel("reject") },
 ]);
@@ -85,8 +120,45 @@ const interviewerReviewResultLabel = computed(() => (currentUiLanguage.value ===
 const interviewerReviewCommentLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Comments" : "评价内容"));
 const interviewerReviewPlaceholder = computed(() => (currentUiLanguage.value === "en-US" ? "Enter your evaluation notes" : "请输入评价内容"));
 const interviewerReviewEmpty = computed(() => (currentUiLanguage.value === "en-US" ? "No resume preview available yet." : "当前暂无可预览的简表。"));
+const interviewerReviewListEmpty = computed(() => (currentUiLanguage.value === "en-US" ? "No interviewer reviews yet." : "当前暂无面试官评价。"));
 const reviewerResultColumnLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Review Result" : "评价结果"));
 const interviewDetailActionLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Interview Detail" : "面试详情"));
+const interviewerEvaluationColumnLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Interviewer Evaluation" : "面试官评价"));
+const reviewStatusDialogTitle = computed(() => (currentUiLanguage.value === "en-US" ? "Interviewer Evaluation" : "面试官评价"));
+const reviewStatusEmptyLabel = computed(() => (currentUiLanguage.value === "en-US" ? "No interviewer reviews yet." : "当前暂无面试官评价。"));
+const reviewStatusNoPermissionLabel = computed(() =>
+  currentUiLanguage.value === "en-US" ? "Your account cannot view interviewer evaluation details." : "当前账号暂不支持查看面试官评价详情。"
+);
+const reviewerNameLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Reviewer" : "面试官"));
+const reviewerUpdatedAtLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Updated At" : "评价时间"));
+const reviewerCommentLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Comment" : "评价内容"));
+const reviewerAdmissionStatusLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Admission Suggestion" : "录取建议"));
+const reviewerResultDisplayLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Review Result" : "评价结果"));
+const reviewerStatusLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Review Status" : "评价状态"));
+const reviewStatusCandidateLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Candidate" : "候选人"));
+const reviewStatusTeamLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Team" : "团队"));
+const currentOperatorDialogTitle = computed(() => (currentUiLanguage.value === "en-US" ? "Current Operator Name" : "当前使用人姓名"));
+const currentOperatorFieldLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Current Operator" : "当前使用人"));
+const currentOperatorPlaceholder = computed(() => (currentUiLanguage.value === "en-US" ? "Please enter the current operator name" : "请输入当前使用人姓名"));
+const currentOperatorConfirmLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Confirm" : "确认"));
+const currentOperatorCloseLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Close" : "关闭"));
+const currentOperatorBackLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Back" : "返回上一页"));
+const accountRealNameLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Account Name" : "账号姓名"));
+const currentOperatorSummaryLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Current Operator" : "当前使用人"));
+const accountRealNameDisplay = computed(
+  () => interviewerProfileState.value.accountRealName || currentUser.value?.account_real_name || currentUser.value?.real_name || "-"
+);
+const currentOperatorNameDisplay = computed(() => interviewerProfileState.value.currentOperatorName || "-");
+const fullscreenToggleLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Fullscreen" : "全屏展示"));
+const windowedToggleLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Windowed" : "窗口展示"));
+const simpleFormPreviewToggleLabel = computed(() => (simpleFormPreviewFullscreen.value ? windowedToggleLabel.value : fullscreenToggleLabel.value));
+const interviewerPreviewToggleLabel = computed(() => (interviewerPreviewFullscreen.value ? windowedToggleLabel.value : fullscreenToggleLabel.value));
+const simpleFormPreviewCloseConfirmTitle = computed(() => (currentUiLanguage.value === "en-US" ? "Confirm Close" : "确认关闭"));
+const simpleFormPreviewCloseConfirmBody = computed(() =>
+  currentUiLanguage.value === "en-US"
+    ? "Are you sure you want to close the preview? This will close all related dialogs."
+    : "确认关闭预览吗？确认后将关闭所有相关弹框。"
+);
 
 const documentDialogTitle = computed(() => (documentSimpleFillVisible.value ? (currentUiLanguage.value === "en-US" ? "Resume Fill" : "简表填写") : t("fill.documentTitle")));
 const simpleFormActionLabel = computed(() => (currentUiLanguage.value === "en-US" ? "Resume Fill" : "简表填写"));
@@ -176,6 +248,124 @@ function getTone(status) {
   return "warning";
 }
 
+function normalizeDesignerSlot(slot) {
+  const normalizeIsActive = (value) => {
+    if (value === false || value === 0) return false;
+    const normalizedValue = String(value ?? "").trim().toLowerCase();
+    if (normalizedValue === "false" || normalizedValue === "0" || normalizedValue === "disabled") {
+      return false;
+    }
+    return true;
+  };
+
+  if (typeof slot === "string") {
+    return {
+      title: String(slot || "").trim(),
+      is_active: true,
+    };
+  }
+
+  return {
+    ...(slot || {}),
+    title: String(slot?.title || slot?.label || slot?.value || "").trim(),
+    is_active: normalizeIsActive(slot?.is_active),
+  };
+}
+
+function normalizeSlotMatchKey(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[–—]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, "");
+}
+
+function buildDesignerSlots(slots = [], disabledSlotTitles = []) {
+  const disabledSet = new Set((disabledSlotTitles || []).map((slot) => normalizeSlotMatchKey(slot)).filter(Boolean));
+  return (slots || []).map((slot) => {
+    const normalizedSlot = normalizeDesignerSlot(slot);
+    if (disabledSet.has(normalizeSlotMatchKey(normalizedSlot.title))) {
+      return {
+        ...normalizedSlot,
+        is_active: false,
+      };
+    }
+    return normalizedSlot;
+  });
+}
+
+function hasExplicitIsActive(slot) {
+  return !!slot && Object.prototype.hasOwnProperty.call(slot, "is_active") && slot.is_active !== null && slot.is_active !== undefined;
+}
+
+function getDesignerSlotDetailList(data = {}) {
+  if (Array.isArray(data?.slot_details) && data.slot_details.length) {
+    return data.slot_details;
+  }
+
+  return buildDesignerSlots(data?.slots || [], data?.disabled_slots || []);
+}
+
+function buildDesignerSlotStateMaps(slotDetails = []) {
+  const byId = new Map();
+  const byTitle = new Map();
+
+  (slotDetails || [])
+    .map((slot) => normalizeDesignerSlot(slot))
+    .filter((slot) => slot.title)
+    .forEach((slot) => {
+      if (slot.id !== undefined && slot.id !== null && slot.id !== "") {
+        byId.set(String(slot.id), slot);
+      }
+      byTitle.set(normalizeSlotMatchKey(slot.title), slot);
+    });
+
+  return { byId, byTitle };
+}
+
+function applyDesignerSlotStateToRows(rows = [], slotDetails = []) {
+  const { byId, byTitle } = buildDesignerSlotStateMaps(slotDetails);
+
+  return (rows || []).map((row) => {
+    const rawSlot = row?.slot || {};
+    const normalizedRowSlot = normalizeDesignerSlot(rawSlot);
+    const matchedSlot =
+      (rawSlot?.id !== undefined && rawSlot?.id !== null && rawSlot?.id !== "" ? byId.get(String(rawSlot.id)) : null) ||
+      byTitle.get(normalizeSlotMatchKey(normalizedRowSlot.title));
+
+    return {
+      ...row,
+      slot: {
+        ...rawSlot,
+        title: normalizedRowSlot.title,
+        is_active: hasExplicitIsActive(rawSlot)
+          ? normalizedRowSlot.is_active
+          : normalizeDesignerSlot(matchedSlot).is_active,
+      },
+    };
+  });
+}
+
+function buildDesignerConfigPayload(data = {}) {
+  const normalizedSlotDetails = getDesignerSlotDetailList(data)
+    .map((slot) => normalizeDesignerSlot(slot))
+    .filter((slot) => slot.title);
+
+  return {
+    ...(data || {}),
+    slots: normalizedSlotDetails.map((slot) => slot.title),
+    slot_details: normalizedSlotDetails,
+  };
+}
+
+function getRowStatusTone(row) {
+  if (isSlotDisabledRow(row)) {
+    return "disabled";
+  }
+
+  return getTone(row?.status);
+}
+
 function getOccupiedTeamName(row) {
   return (
     row?.entry?.team_name ||
@@ -187,11 +377,20 @@ function getOccupiedTeamName(row) {
 }
 
 function getEntryStatusText(row) {
+  if (isSlotDisabledRow(row)) {
+    return t("fill.disabledSlot");
+  }
+
+  const teamName = String(getOccupiedTeamName(row) || "").trim();
+
   if (isPersonalUser.value && row?.status === "occupied") {
-    const teamName = String(getOccupiedTeamName(row) || "").trim();
     if (teamName) {
       return t("fill.occupiedByTeam", { team: teamName });
     }
+  }
+
+  if (!isPersonalUser.value && row?.status === "filled" && teamName) {
+    return t("fill.filledByTeam", { team: teamName });
   }
 
   return getEntryStatusLabel(row?.status);
@@ -307,7 +506,49 @@ function isHiddenPersonalField(field) {
 
   const label = normalizeFieldLabel(field);
   const key = String(field?.field_key || "").trim().toLowerCase();
-  return label === "状态" || key === "status";
+  return label === "状态" || key === "status" || isAdmissionField(field);
+}
+
+function isCompanyEnglishField(field) {
+  const label = normalizeFieldLabel(field);
+  const key = String(field?.field_key || "").trim().toLowerCase();
+  return (
+    label === "公司名称（英文）" ||
+    key === "company_name_en" ||
+    key === "companynameen" ||
+    key === "company_english_name" ||
+    key === "companyenglishname"
+  );
+}
+
+function isPersonalFieldRequired(field) {
+  if (!field || !isPersonalUser.value || isHiddenPersonalField(field)) {
+    return false;
+  }
+
+  return !isCompanyEnglishField(field);
+}
+
+function getFieldRequiredMark(field) {
+  return field?.is_required || isPersonalFieldRequired(field);
+}
+
+function getFieldValueText(value) {
+  return String(value ?? "").trim();
+}
+
+function validatePersonalEntryValues() {
+  if (!isPersonalUser.value) {
+    return;
+  }
+
+  const missingField = visibleFields.value.find((field) => isPersonalFieldRequired(field) && !getFieldValueText(entryValues.value[field.field_key]));
+  if (!missingField) {
+    return;
+  }
+
+  const fieldLabel = getLocalizedFieldLabel(missingField) || missingField.display_label || missingField.field_label || "";
+  throw new Error(currentUiLanguage.value === "en-US" ? `${fieldLabel} is required.` : `${fieldLabel}为必填项`);
 }
 
 const visibleFields = computed(() => (tableData.value?.fields || []).filter((field) => !isHiddenPersonalField(field)));
@@ -412,12 +653,12 @@ function getAdmissionTone(value) {
   return "warning";
 }
 
-function isSlotDisabledTitle(title) {
-  return disabledSlotTitles.value.includes(String(title || "").trim());
+function isSlotDisabledRow(row) {
+  return normalizeDesignerSlot(row?.slot).is_active === false;
 }
 
-function isSlotDisabledRow(row) {
-  return isSlotDisabledTitle(row?.slot?.title);
+function isRowFillDisabled(row) {
+  return normalizeDesignerSlot(row?.slot).is_active === false || row?.can_fill === false;
 }
 
 const moveSlotOptions = computed(() => {
@@ -449,6 +690,22 @@ function hasUploadedDocument(row) {
   return !!(entryId && documentUploadStateMap.value[entryId]);
 }
 
+function hasCompletedResume(row) {
+  return hasUploadedDocument(row);
+}
+
+function getDocumentActionButtonClass(row) {
+  return hasCompletedResume(row) ? ["fill-row-view-btn", "is-ready"] : "btn-secondary";
+}
+
+function isOccupiedLockedRow(row) {
+  return isPersonalUser.value && row?.status === "occupied";
+}
+
+function getOccupiedLockedActionLabel() {
+  return currentUiLanguage.value === "en-US" ? "Occupied - unavailable" : "已被占用不可操作";
+}
+
 function getPreviewableDocument(row) {
   const entryId = String(row?.entry?.id || "");
   const documents = entryId ? entryDocumentsMap.value[entryId] || [] : [];
@@ -465,16 +722,117 @@ function getReviewResultValue(row) {
   return reviewResultStateMap.value[entryId] || "pending";
 }
 
-function getReviewResultTone(row) {
-  const result = getReviewResultValue(row);
+function getReviewResultToneByValue(result) {
   if (result === "pass") return "success";
   if (result === "reject") return "danger";
+  if (result === "in_progress") return "warning";
   return "neutral";
 }
 
+function getReviewResultTone(row) {
+  return getReviewResultToneByValue(getReviewResultValue(row));
+}
+
+function normalizeReviewPayload(result) {
+  const payload = result?.data || result || {};
+  const reviews = payload?.items || payload?.reviews || payload?.data || [];
+  if (Array.isArray(reviews)) {
+    return reviews;
+  }
+  if (payload?.review && typeof payload.review === "object") {
+    return [payload.review];
+  }
+  if (typeof payload === "object" && payload?.result) {
+    return [payload];
+  }
+  return [];
+}
+
+function normalizeReviewItem(item, index = 0) {
+  const reviewer =
+    item?.reviewer_name ||
+    item?.reviewer?.real_name ||
+    item?.reviewer?.name ||
+    item?.interviewer_name ||
+    item?.interviewer?.real_name ||
+    item?.interviewer?.name ||
+    item?.team_name ||
+    item?.user_name ||
+    item?.real_name ||
+    `${reviewerNameLabel.value} ${index + 1}`;
+
+  return {
+    reviewer,
+    result: item?.result || item?.review_result || item?.status || "pending",
+    comment: item?.comment || item?.review_comment || item?.remarks || item?.content || "",
+    updatedAt: item?.updated_at || item?.reviewed_at || item?.created_at || "",
+  };
+}
+
+function isCompletedReviewItem(item) {
+  if (!item) return false;
+  const comment = String(item.comment || "").trim();
+  const result = String(item.result || "").trim().toLowerCase();
+  return Boolean(comment || (result && result !== "pending"));
+}
+
+function getCompletedReviewCount(items) {
+  return (items || []).filter(isCompletedReviewItem).length;
+}
+
+const reviewStatusCountLabel = computed(() =>
+  currentUiLanguage.value === "en-US"
+    ? `${Number(reviewStatusSummary.value?.evaluatedCount || 0)}/2 reviewed`
+    : `${Number(reviewStatusSummary.value?.evaluatedCount || 0)}/2\u4eba\u5df2\u8bc4\u4ef7`
+);
+
+function getReviewStatusButtonLabel(row) {
+  const evaluatedCount = Number(row?.review_summary?.evaluated_count || 0);
+  return currentUiLanguage.value === "en-US"
+    ? `Interviewer Evaluation (${evaluatedCount}/2 reviewed)`
+    : `\u9762\u8bd5\u5b98\u8bc4\u4ef7\uff08${evaluatedCount}/2\u4eba\u5df2\u8bc4\u4ef7\uff09`;
+}
+
+function getTableCellDisplayValue(field, row) {
+  const rawValue = row.values?.[field.field_key]?.display_value || row.values?.[field.field_key]?.value;
+  const localizedValue = getLocalizedFieldValue(field, rawValue);
+  return localizedValue || (row.can_view ? "-" : "不可查看");
+}
+
+function getLatestTimestampValue(...values) {
+  const candidates = values
+    .flat()
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map((value) => ({ raw: value, time: new Date(value).getTime() }))
+    .filter((item) => !Number.isNaN(item.time));
+
+  if (!candidates.length) {
+    return "";
+  }
+
+  candidates.sort((left, right) => right.time - left.time);
+  return candidates[0]?.raw || "";
+}
+
+function getRowLatestUpdatedAt(row) {
+  const entryId = String(row?.entry?.id || "");
+  const documents = entryId ? entryDocumentsMap.value[entryId] || [] : [];
+  const latestDocumentTime = getLatestTimestampValue(
+    documents.map((item) => item?.updated_at || item?.created_at || "")
+  );
+  return getLatestTimestampValue(row?.entry?.updated_at, row?.entry?.created_at, latestDocumentTime);
+}
+
+function getRowLatestUpdatedDisplay(row) {
+  const latestValue = getRowLatestUpdatedAt(row);
+  return latestValue ? formatDateTime(latestValue) : "-";
+}
+
 async function loadInterviewerReviewStates(rows) {
-  if (!isInterviewer.value) {
+  if (!isInterviewer.value && !isAdminViewer.value) {
     reviewResultStateMap.value = {};
+    reviewSummaryMap.value = {};
     return;
   }
 
@@ -484,30 +842,34 @@ async function loadInterviewerReviewStates(rows) {
 
   if (!entryIds.length) {
     reviewResultStateMap.value = {};
+    reviewSummaryMap.value = {};
     return;
   }
 
   const results = await Promise.allSettled(entryIds.map((entryId) => listReviews(entryId)));
   const nextMap = {};
+  const nextSummaryMap = {};
 
   results.forEach((result, index) => {
     const entryId = entryIds[index];
     if (result.status !== "fulfilled") {
       nextMap[entryId] = "pending";
+      nextSummaryMap[entryId] = [];
       return;
     }
 
-    const payload = result.value?.data;
-    const reviews = payload?.items || payload?.reviews || [];
-    const latestReview = Array.isArray(reviews) && reviews.length ? reviews[0] : payload?.review || payload || null;
+    const reviews = normalizeReviewPayload(result.value);
+    const latestReview = Array.isArray(reviews) && reviews.length ? reviews[0] : null;
     nextMap[entryId] = latestReview?.result || latestReview?.review_result || latestReview?.status || "pending";
+    nextSummaryMap[entryId] = reviews.map((item, itemIndex) => normalizeReviewItem(item, itemIndex));
   });
 
   reviewResultStateMap.value = nextMap;
+  reviewSummaryMap.value = nextSummaryMap;
 }
 
 async function loadInterviewerDocumentStates(rows) {
-  if (!canViewInterviewDetail.value) {
+  if (!canTrackDocumentUpload.value) {
     documentUploadStateMap.value = {};
     entryDocumentsMap.value = {};
     return;
@@ -687,14 +1049,42 @@ function closeSimpleFillInDocumentDialog() {
 function resetSimpleFormPreviewDialogState() {
   simpleFormPreviewLoading.value = false;
   simpleFormPreviewHtml.value = "";
+  simpleFormPreviewFullscreen.value = false;
 }
 
 function closeSimpleFormPreviewDialog() {
+  openDialogWithAnimation(simpleFormPreviewConfirmDialog, {
+    originPoint: {
+      x: window.innerWidth * 0.76,
+      y: window.innerHeight * 0.2,
+    },
+  });
+}
+
+function closeSimpleFormPreviewConfirmDialog() {
+  if (simpleFormPreviewConfirmDialog.value?.open) {
+    closeDialogWithAnimation(simpleFormPreviewConfirmDialog);
+  }
+}
+
+function confirmCloseSimpleFormPreviewDialog() {
+  closeSimpleFormPreviewConfirmDialog();
   if (simpleFormPreviewDialog.value?.open) {
     closeDialogWithAnimation(simpleFormPreviewDialog);
+  } else {
+    resetSimpleFormPreviewDialogState();
+  }
+
+  if (documentDialog.value?.open) {
+    closeDialogWithAnimation(documentDialog);
     return;
   }
-  resetSimpleFormPreviewDialogState();
+
+  resetDocumentDialogState();
+}
+
+function toggleSimpleFormPreviewFullscreen() {
+  simpleFormPreviewFullscreen.value = !simpleFormPreviewFullscreen.value;
 }
 
 async function openSimpleFormPreviewDialog(event) {
@@ -883,6 +1273,8 @@ async function openInterviewerPreview(row, event) {
   interviewerReviewLoading.value = true;
   interviewerReviewResult.value = "pending";
   interviewerReviewComment.value = "";
+  interviewerReviewItems.value = [];
+  interviewerPreviewFullscreen.value = false;
   interviewerReviewDialog.value?.showModal();
 
   try {
@@ -900,12 +1292,17 @@ async function openInterviewerPreview(row, event) {
     if (row?.entry?.id) {
       tasks.push(
         listReviews(row.entry.id).then((result) => {
-          const payload = result?.data;
-          const reviews = payload?.items || payload?.reviews || [];
-          const latestReview = Array.isArray(reviews) && reviews.length ? reviews[0] : payload?.review || payload || null;
-          interviewerReviewResult.value = latestReview?.result || latestReview?.review_result || latestReview?.status || "pending";
-          interviewerReviewComment.value =
-            latestReview?.comment || latestReview?.review_comment || latestReview?.remarks || latestReview?.content || "";
+          const reviews = normalizeReviewPayload(result);
+          interviewerReviewItems.value = Array.isArray(reviews)
+            ? reviews.map((item, itemIndex) => normalizeReviewItem(item, itemIndex))
+            : [];
+
+          if (canEditInterviewReview.value) {
+            const latestReview = Array.isArray(reviews) && reviews.length ? reviews[0] : null;
+            interviewerReviewResult.value = latestReview?.result || latestReview?.review_result || latestReview?.status || "pending";
+            interviewerReviewComment.value =
+              latestReview?.comment || latestReview?.review_comment || latestReview?.remarks || latestReview?.content || "";
+          }
         })
       );
     }
@@ -932,6 +1329,78 @@ function closeInterviewerReviewDialog() {
   interviewerReviewDialog.value?.close();
 }
 
+async function openReviewStatusDialog(row) {
+  if (!row?.entry?.id) return;
+
+  reviewStatusRow.value = row;
+  reviewStatusLoading.value = true;
+  reviewStatusItems.value = [];
+  reviewStatusSummary.value = {
+    candidateName: "",
+    teamName: "",
+    evaluatedCount: 0,
+    totalInterviewerCount: null,
+  };
+  reviewStatusDialog.value?.showModal();
+
+  if (!canViewReviewStatusDetail.value) {
+    reviewStatusLoading.value = false;
+    errorMessage.value = "";
+    return;
+  }
+
+  try {
+    const result = await getFormEntryReviews(formId.value, row.entry.id);
+    const payload = result?.data?.data || result?.data || result || {};
+    const reviews = Array.isArray(payload?.reviews) ? payload.reviews : [];
+    const items = reviews.map((item, index) => ({
+      reviewer: item?.interviewer_name || `${reviewerNameLabel.value} ${index + 1}`,
+      reviewStatus: item?.review_status || "",
+      admissionStatus: item?.admission_status || "-",
+      result: item?.result || "pending",
+      comment: item?.comment || "",
+      updatedAt: item?.updated_at || item?.created_at || "",
+    }));
+
+    reviewStatusSummary.value = {
+      candidateName: payload?.candidate_name || "",
+      teamName: payload?.team_name || "",
+      evaluatedCount: Number(payload?.evaluated_count || 0),
+      totalInterviewerCount: payload?.total_interviewer_count ?? null,
+    };
+    reviewStatusItems.value = items;
+  } catch (error) {
+    if (error?.status === 403) {
+      errorMessage.value = reviewStatusNoPermissionLabel.value;
+      closeReviewStatusDialog();
+      return;
+    }
+    errorMessage.value = error.message || t("common.loading");
+  } finally {
+    reviewStatusLoading.value = false;
+  }
+}
+
+function closeReviewStatusDialog() {
+  reviewStatusDialog.value?.close();
+}
+
+function resetReviewStatusDialog() {
+  reviewStatusLoading.value = false;
+  reviewStatusRow.value = null;
+  reviewStatusItems.value = [];
+  reviewStatusSummary.value = {
+    candidateName: "",
+    teamName: "",
+    evaluatedCount: 0,
+    totalInterviewerCount: null,
+  };
+}
+
+function toggleInterviewerPreviewFullscreen() {
+  interviewerPreviewFullscreen.value = !interviewerPreviewFullscreen.value;
+}
+
 function resetInterviewerReviewDialog() {
   interviewerReviewRow.value = null;
   interviewerPreviewLoading.value = false;
@@ -940,6 +1409,8 @@ function resetInterviewerReviewDialog() {
   interviewerReviewSaving.value = false;
   interviewerReviewResult.value = "pending";
   interviewerReviewComment.value = "";
+  interviewerReviewItems.value = [];
+  interviewerPreviewFullscreen.value = false;
 }
 
 async function submitInterviewerReview() {
@@ -953,6 +1424,13 @@ async function submitInterviewerReview() {
       result: interviewerReviewResult.value,
       comment: interviewerReviewComment.value.trim(),
     });
+    const refreshedReviews = await listReviews(interviewerReviewRow.value.entry.id).catch(() => null);
+    if (refreshedReviews) {
+      const reviews = normalizeReviewPayload(refreshedReviews);
+      interviewerReviewItems.value = Array.isArray(reviews)
+        ? reviews.map((item, itemIndex) => normalizeReviewItem(item, itemIndex))
+        : [];
+    }
     reviewResultStateMap.value = {
       ...reviewResultStateMap.value,
       [String(interviewerReviewRow.value.entry.id)]: interviewerReviewResult.value,
@@ -1023,12 +1501,22 @@ async function toggleDisabledMoveSlot(option) {
     return;
   }
 
-  const normalizedSlots = Array.isArray(designerConfig.value?.slots)
-    ? designerConfig.value.slots.map((slot) => String(slot || "").trim()).filter(Boolean)
-    : (tableData.value?.rows || []).map((row) => String(row?.slot?.title || "").trim()).filter(Boolean);
-  const nextDisabledSlotTitles = disabledSlotTitles.value.includes(option.label)
-    ? disabledSlotTitles.value.filter((item) => item !== option.label)
-    : [...disabledSlotTitles.value, option.label];
+  const fallbackSlots = (tableData.value?.rows || []).map((row) => ({
+    id: row?.slot?.id,
+    title: String(row?.slot?.title || "").trim(),
+    is_active: normalizeDesignerSlot(row?.slot).is_active,
+  }));
+  const baseSlots = Array.isArray(designerConfig.value?.slot_details) && designerConfig.value.slot_details.length
+    ? designerConfig.value.slot_details
+    : fallbackSlots;
+  const nextSlots = baseSlots
+    .map((slot) => normalizeDesignerSlot(slot))
+    .filter((slot) => slot.title)
+    .map((slot) => (
+      slot.title === option.label
+        ? { ...slot, is_active: !slot.is_active }
+        : slot
+    ));
 
   togglingDisabledSlot.value = true;
   errorMessage.value = "";
@@ -1037,17 +1525,46 @@ async function toggleDisabledMoveSlot(option) {
     await saveSimpleDesigner(formId.value, {
       headers: designerConfig.value?.headers || [],
       required_headers: designerConfig.value?.required_headers || [],
-      slots: normalizedSlots,
-      disabled_slots: nextDisabledSlotTitles.filter((slot) => normalizedSlots.includes(slot)),
+      slots: nextSlots.map((slot) => ({
+        title: slot.title,
+        is_active: slot.is_active !== false,
+      })),
     });
-    disabledSlotTitles.value = nextDisabledSlotTitles.filter((slot) => normalizedSlots.includes(slot));
-    if (disabledSlotTitles.value.includes(option.label) && targetSlotId.value === option.value) {
+    designerConfig.value = buildDesignerConfigPayload({
+      ...(designerConfig.value || {}),
+      slots: nextSlots.map((slot) => ({
+        title: slot.title,
+        is_active: slot.is_active !== false,
+      })),
+      slot_details: nextSlots,
+    });
+    tableData.value = tableData.value
+      ? {
+          ...tableData.value,
+          rows: (tableData.value.rows || []).map((row) => {
+            const rowTitle = normalizeSlotMatchKey(row?.slot?.title);
+            const matchedSlot = nextSlots.find((slot) => normalizeSlotMatchKey(slot.title) === rowTitle);
+            if (!matchedSlot) {
+              return row;
+            }
+
+            return {
+              ...row,
+              slot: {
+                ...(row?.slot || {}),
+                is_active: matchedSlot.is_active,
+              },
+            };
+          }),
+        }
+      : tableData.value;
+    if (nextSlots.find((slot) => slot.title === option.label)?.is_active === false && targetSlotId.value === option.value) {
       targetSlotId.value = "";
     }
     setCachedResource(tableCacheKey.value, {
       currentUser: currentUser.value,
       tableData: tableData.value,
-      disabledSlotTitles: disabledSlotTitles.value,
+      designerConfig: designerConfig.value,
     });
   } catch (error) {
     errorMessage.value = error.message || t("common.save");
@@ -1056,12 +1573,210 @@ async function toggleDisabledMoveSlot(option) {
   }
 }
 
+function validateLegacyCurrentOperatorName(value) {
+  const normalizedValue = String(value || "");
+  const trimmedValue = normalizedValue.trim();
+
+  if (!trimmedValue) {
+    return currentUiLanguage.value === "en-US" ? "Name is required." : "姓名不能为空";
+  }
+
+  if (/\s/.test(normalizedValue)) {
+    return currentUiLanguage.value === "en-US" ? "Name cannot contain spaces." : "姓名不能包含空格";
+  }
+
+  if (trimmedValue.length < 2 || trimmedValue.length > 64) {
+    return currentUiLanguage.value === "en-US" ? "Name must be 2 to 64 characters." : "姓名长度需为2到64个字符";
+  }
+
+  return "";
+}
+
+function openLegacyCurrentOperatorDialog() {
+  if (currentOperatorDialog.value?.open) {
+    return;
+  }
+
+  currentOperatorNameError.value = "";
+  openDialogWithAnimation(currentOperatorDialog, {
+    originPoint: {
+      x: window.innerWidth / 2,
+      y: window.innerHeight * 0.22,
+    },
+  });
+}
+
+function handleLegacyCurrentOperatorNameInput(event) {
+  currentOperatorNameValue.value = String(event?.target?.value || "");
+  currentOperatorNameError.value = "";
+}
+
+async function ensureLegacyCurrentOperatorProfile() {
+  if (currentUser.value?.role !== "interviewer") {
+    return;
+  }
+
+  try {
+    const result = await fetchInterviewerProfile();
+    const profile = result?.data || {};
+    const displayName = String(profile?.current_operator_name || "").trim();
+
+    currentOperatorNameValue.value = displayName;
+
+    if (!profile?.has_current_operator_name) {
+      await nextTick();
+      openCurrentOperatorDialog();
+    }
+  } catch (error) {
+    errorMessage.value = error.message || (currentUiLanguage.value === "en-US" ? "Failed to load interviewer profile." : "获取面试官信息失败");
+  }
+}
+
+async function submitLegacyCurrentOperatorName() {
+  const validationMessage = validateLegacyCurrentOperatorName(currentOperatorNameValue.value);
+  if (validationMessage) {
+    currentOperatorNameError.value = validationMessage;
+    return;
+  }
+
+  currentOperatorNameSubmitting.value = true;
+  currentOperatorNameError.value = "";
+
+  try {
+    const result = await updateInterviewerProfile(String(currentOperatorNameValue.value).trim());
+    const profile = result?.data || {};
+    const nextDisplayName = String(profile?.current_operator_name || "").trim();
+    const nextUser = {
+      ...(currentUser.value || {}),
+      current_operator_name: nextDisplayName,
+      has_current_operator_name: !!profile?.has_current_operator_name,
+      real_name: nextDisplayName || currentUser.value?.real_name || "",
+    };
+
+    currentUser.value = nextUser;
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("app:current-user-updated", {
+          detail: { user: nextUser },
+        })
+      );
+    }
+    closeDialogWithAnimation(currentOperatorDialog);
+  } catch (error) {
+    currentOperatorNameError.value = error.message || (currentUiLanguage.value === "en-US" ? "Failed to save interviewer name." : "保存面试官姓名失败");
+  } finally {
+    currentOperatorNameSubmitting.value = false;
+  }
+}
+
+function validateCurrentOperatorName(value) {
+  const trimmedValue = String(value || "").trim();
+
+  if (!trimmedValue) {
+    return currentUiLanguage.value === "en-US" ? "Current operator name is required." : "当前使用人姓名不能为空";
+  }
+
+  if (trimmedValue.length < 2 || trimmedValue.length > 64) {
+    return currentUiLanguage.value === "en-US" ? "Current operator name must be 2 to 64 characters." : "当前使用人姓名长度需为2到64个字符";
+  }
+
+  return "";
+}
+
+function openCurrentOperatorDialog() {
+  if (currentOperatorDialog.value?.open) {
+    return;
+  }
+
+  currentOperatorDialogMode.value = currentOperatorDialogMode.value || "required";
+  currentOperatorNameError.value = "";
+  openDialogWithAnimation(currentOperatorDialog, {
+    originPoint: {
+      x: window.innerWidth / 2,
+      y: window.innerHeight * 0.22,
+    },
+  });
+}
+
+function handleCurrentOperatorNameInput(event) {
+  currentOperatorNameValue.value = String(event?.target?.value || "");
+  currentOperatorNameError.value = "";
+}
+
+async function ensureCurrentOperatorProfile() {
+  if (currentUser.value?.role !== "interviewer") {
+    return;
+  }
+
+  try {
+    const result = await fetchInterviewerProfile();
+    const profile = result?.data || {};
+    interviewerProfileState.value = {
+      accountRealName: String(profile?.account_real_name || currentUser.value?.account_real_name || currentUser.value?.real_name || "").trim(),
+      currentOperatorName: String(profile?.current_operator_name || "").trim(),
+      hasCurrentOperatorName: !!profile?.has_current_operator_name,
+    };
+    currentOperatorNameValue.value = interviewerProfileState.value.currentOperatorName;
+    if (interviewerProfileState.value.hasCurrentOperatorName) {
+      markCurrentOperatorPromptHandled();
+      return;
+    }
+  } catch (error) {
+    errorMessage.value = error.message || (currentUiLanguage.value === "en-US" ? "Failed to load interviewer profile." : "获取面试官信息失败");
+  }
+
+  if (getCurrentOperatorPromptHandled()) {
+    return;
+  }
+
+  await nextTick();
+  openCurrentOperatorDialog();
+  markCurrentOperatorPromptHandled();
+}
+
+async function submitCurrentOperatorName() {
+  const validationMessage = validateCurrentOperatorName(currentOperatorNameValue.value);
+  if (validationMessage) {
+    currentOperatorNameError.value = validationMessage;
+    return;
+  }
+
+  currentOperatorNameSubmitting.value = true;
+  currentOperatorNameError.value = "";
+
+  try {
+    const result = await updateInterviewerProfile(String(currentOperatorNameValue.value).trim());
+    const profile = result?.data || {};
+    interviewerProfileState.value = {
+      accountRealName: String(profile?.account_real_name || interviewerProfileState.value.accountRealName || currentUser.value?.account_real_name || currentUser.value?.real_name || "").trim(),
+      currentOperatorName: String(profile?.current_operator_name || "").trim(),
+      hasCurrentOperatorName: !!profile?.has_current_operator_name,
+    };
+    currentOperatorNameValue.value = interviewerProfileState.value.currentOperatorName;
+    markCurrentOperatorPromptHandled();
+    closeDialogWithAnimation(currentOperatorDialog);
+  } catch (error) {
+    currentOperatorNameError.value =
+      error?.response?.data?.message ||
+      error?.payload?.message ||
+      error.message ||
+      (currentUiLanguage.value === "en-US" ? "Failed to save current operator name." : "保存当前使用人姓名失败");
+  } finally {
+    currentOperatorNameSubmitting.value = false;
+  }
+}
+
 async function loadPage() {
   const cached = getCachedResource(tableCacheKey.value);
   if (cached) {
     currentUser.value = cached.currentUser || currentUser.value;
-    tableData.value = cached.tableData || tableData.value;
-    disabledSlotTitles.value = cached.disabledSlotTitles || disabledSlotTitles.value;
+    designerConfig.value = cached.designerConfig || designerConfig.value;
+    tableData.value = cached.tableData
+      ? {
+          ...cached.tableData,
+          rows: applyDesignerSlotStateToRows(cached.tableData.rows || [], cached.designerConfig?.slot_details || []),
+        }
+      : tableData.value;
     loading.value = false;
   } else {
     loading.value = true;
@@ -1073,19 +1788,28 @@ async function loadPage() {
     tableData.value = tableResult?.data || null;
 
     const designerResult = await getSimpleDesigner(formId.value).catch(() => null);
-    designerConfig.value = designerResult?.data || null;
-    disabledSlotTitles.value = designerResult?.data?.disabled_slots || [];
+    designerConfig.value = designerResult?.data ? buildDesignerConfigPayload(designerResult.data) : null;
+    tableData.value = tableData.value
+      ? {
+          ...tableData.value,
+          rows: applyDesignerSlotStateToRows(tableData.value.rows || [], designerConfig.value?.slot_details || []),
+        }
+      : tableData.value;
 
     await Promise.all([loadInterviewerDocumentStates(tableData.value?.rows || []), loadInterviewerReviewStates(tableData.value?.rows || [])]);
     setCachedResource(tableCacheKey.value, {
       currentUser: me,
       tableData: tableData.value,
-      disabledSlotTitles: disabledSlotTitles.value,
+      designerConfig: designerConfig.value,
     });
   } catch (error) {
     errorMessage.value = error.message || t("common.loading");
   } finally {
     loading.value = false;
+    if (currentUser.value?.role === "interviewer" && !errorMessage.value) {
+      await nextTick();
+      await ensureCurrentOperatorProfile();
+    }
   }
 }
 
@@ -1111,6 +1835,8 @@ async function handleSaveEntry() {
       closeSimpleFillInDocumentDialog();
       return;
     }
+
+    validatePersonalEntryValues();
 
     if (editingRow.value.entry?.id) {
       await updateEntry(editingRow.value.entry.id, { values: entryValues.value });
@@ -1198,12 +1924,60 @@ function handleInterviewerAccessGranted() {
   loadPage();
 }
 
+function openCurrentOperatorEditDialog() {
+  currentOperatorDialogMode.value = "edit";
+  currentOperatorNameValue.value = interviewerProfileState.value.currentOperatorName || "";
+  currentOperatorNameError.value = "";
+  openCurrentOperatorDialog();
+}
+
+function getCurrentOperatorPromptHandled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return window.sessionStorage.getItem(currentOperatorPromptStorageKey.value) === "1";
+}
+
+function markCurrentOperatorPromptHandled() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.setItem(currentOperatorPromptStorageKey.value, "1");
+}
+
+async function returnToPreviousPage() {
+  closeDialogWithAnimation(currentOperatorDialog, {
+    afterClose: async () => {
+      if (window.history.length > 1) {
+        await router.back();
+        return;
+      }
+
+      await router.push("/forms");
+    },
+  });
+}
+
+function handleCurrentOperatorSecondaryAction() {
+  if (currentOperatorDialogMode.value === "edit") {
+    closeDialogWithAnimation(currentOperatorDialog);
+    return;
+  }
+
+  returnToPreviousPage();
+}
+
 onMounted(loadPage);
 
 onBeforeUnmount(() => {
   resetDialogMotion(editorDialog);
   resetDialogMotion(documentDialog);
+  resetDialogMotion(currentOperatorDialog);
+  resetDialogMotion(reviewStatusDialog);
   resetDialogMotion(simpleFormPreviewDialog);
+  resetDialogMotion(simpleFormPreviewConfirmDialog);
   resetDialogMotion(deleteDialog);
   resetDialogMotion(moveSlotDialog);
   window.removeEventListener("app:interviewer-access-granted", handleInterviewerAccessGranted);
@@ -1223,7 +1997,41 @@ watch(currentUiLanguage, () => {
   <LoadingBlock v-if="loading" :label="t('common.loading')" />
 
   <div v-else-if="tableData" class="fill-page">
+    <dialog ref="currentOperatorDialog" class="modal-dialog interviewer-name-dialog" @cancel.prevent>
+      <div class="modal-shell interviewer-name-dialog-shell">
+        <div class="modal-surface interviewer-name-dialog-surface">
+          <div class="panel-header modal-header interviewer-name-dialog-header">
+            <h3>{{ currentOperatorDialogTitle }}</h3>
+          </div>
+          <form class="panel-body stack-form modal-body interviewer-name-dialog-body" @submit.prevent="submitCurrentOperatorName">
+            <label class="field-block interviewer-name-field">
+              <span>{{ currentOperatorFieldLabel }}</span>
+              <input
+                :value="currentOperatorNameValue"
+                type="text"
+                autofocus
+                maxlength="64"
+                :disabled="currentOperatorNameSubmitting"
+                :placeholder="currentOperatorPlaceholder"
+                @input="handleCurrentOperatorNameInput"
+              />
+            </label>
+            <p v-if="currentOperatorNameError" class="error-alert" role="alert">{{ currentOperatorNameError }}</p>
+            <div class="form-actions interviewer-name-dialog-actions">
+              <button class="btn btn-secondary" type="button" @click="handleCurrentOperatorSecondaryAction">
+                {{ currentOperatorDialogMode === "edit" ? "取消" : currentOperatorBackLabel }}
+              </button>
+              <button class="btn btn-primary" type="submit" :disabled="currentOperatorNameSubmitting">
+                {{ currentOperatorNameSubmitting ? t("forms.submitting") : currentOperatorConfirmLabel }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
     <section class="fill-hero panel">
+      <CodeFlowBackdrop variant="banner" />
       <div class="fill-hero-body" :class="{ 'fill-hero-body--interviewer': isInterviewer }">
         <img v-if="!isInterviewer" class="fill-hero-logo" :src="bossKnowLogo" alt="BOSS KNOW" />
         <div class="fill-hero-copy">
@@ -1237,16 +2045,42 @@ watch(currentUiLanguage, () => {
       </div>
     </section>
 
-    <dialog ref="editorDialog" class="modal-dialog fill-editor-dialog" @close="resetEditorState">
-      <div class="modal-shell fill-editor-dialog-shell">
-        <div class="modal-surface fill-editor-dialog-surface">
-          <div class="panel-header modal-header fill-editor-dialog-header">
-            <h3>{{ editingRow?.entry?.id ? t("fill.edit") : t("fill.contentTitle") }}</h3>
-            <button class="btn btn-secondary" type="button" @click="closeEditor">{{ t("common.close") }}</button>
+    <section v-if="isInterviewer" class="panel fill-panel">
+      <div class="panel-body fill-panel-body">
+        <div class="fill-panel-head">
+          <div class="fill-panel-intro">
+            <div class="fill-panel-titlewrap">
+              <h2>{{ accountRealNameLabel }}：{{ accountRealNameDisplay }}</h2>
+              <p class="muted-text fill-note">{{ currentOperatorSummaryLabel }}：{{ currentOperatorNameDisplay }}</p>
+            </div>
           </div>
-          <form v-if="editorVisible && editingRow" class="stack-form panel-body modal-body fill-editor-dialog-body" @submit.prevent="handleSaveEntry">
+          <div class="form-actions fill-panel-actions">
+            <button class="btn btn-secondary" type="button" @click="openCurrentOperatorEditDialog">修改名字</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <dialog ref="editorDialog" class="modal-dialog fill-editor-dialog" @close="resetEditorState">
+        <div class="modal-shell fill-editor-dialog-shell">
+          <div class="modal-surface fill-editor-dialog-surface">
+            <div class="panel-header modal-header fill-editor-dialog-header">
+              <h3>{{ editingRow?.entry?.id ? t("fill.edit") : t("fill.contentTitle") }}</h3>
+              <div class="form-actions fill-editor-dialog-header-actions">
+                <button class="btn btn-primary" type="submit" form="fill-editor-form" :disabled="saving">
+                  {{ saving ? t("fill.submitting") : t("fill.submit") }}
+                </button>
+                <button class="btn btn-secondary" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button>
+              </div>
+            </div>
+            <form
+              v-if="editorVisible && editingRow"
+              id="fill-editor-form"
+              class="stack-form panel-body modal-body fill-editor-dialog-body"
+              @submit.prevent="handleSaveEntry"
+            >
             <label v-for="field in visibleFields" :key="field.id" class="field-block">
-              <span>{{ getLocalizedFieldLabel(field) }}<em v-if="field.is_required"> *</em></span>
+              <span>{{ getLocalizedFieldLabel(field) }}<em v-if="getFieldRequiredMark(field)"> *</em></span>
               <UiSelect
                 v-if="getBubbleSelectKind(field)"
                 v-model="entryValues[field.field_key]"
@@ -1259,19 +2093,15 @@ watch(currentUiLanguage, () => {
                 v-else-if="field.field_type === 'textarea'"
                 v-model="entryValues[field.field_key]"
                 rows="3"
-                :required="field.is_required"
+                :required="getFieldRequiredMark(field)"
               />
               <input
                 v-else
                 v-model="entryValues[field.field_key]"
                 :type="field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : 'text'"
-                :required="field.is_required"
+                :required="getFieldRequiredMark(field)"
               />
             </label>
-            <div class="form-actions fill-editor-actions">
-              <button class="btn btn-primary" type="submit" :disabled="saving">{{ saving ? t("fill.submitting") : t("fill.submit") }}</button>
-              <button class="btn btn-secondary" type="button" @click="closeEditor">{{ t("common.cancel") }}</button>
-            </div>
           </form>
         </div>
       </div>
@@ -1298,6 +2128,7 @@ watch(currentUiLanguage, () => {
               <tr>
                 <th>{{ t("fill.timeSlot") }}</th>
                 <th v-for="field in visibleFields" :key="field.id">{{ getLocalizedFieldLabel(field) }}</th>
+                <th v-if="showRecentUpdatedColumn">{{ t("fill.lastUpdatedAt") }}</th>
                 <th v-if="showStatusColumn">{{ t("forms.status") }}</th>
                 <th>{{ t("fill.action") }}</th>
                 <th v-if="isInterviewer">{{ reviewerResultColumnLabel }}</th>
@@ -1313,38 +2144,48 @@ watch(currentUiLanguage, () => {
                   :data-admission-label="isAdmissionField(field) ? getLocalizedFieldValue(field, row.values?.[field.field_key]?.display_value || row.values?.[field.field_key]?.value || '') : ''"
                   :data-admission-tone="isAdmissionField(field) ? getAdmissionTone(row.values?.[field.field_key]?.display_value || row.values?.[field.field_key]?.value || '') : ''"
                 >
-                  {{ getLocalizedFieldValue(field, row.values?.[field.field_key]?.display_value || row.values?.[field.field_key]?.value) || (row.can_view ? "-" : "不可查看") }}
+                  {{ getTableCellDisplayValue(field, row) }}
+                </td>
+                <td v-if="showRecentUpdatedColumn" class="fill-last-updated-cell">
+                  {{ getRowLatestUpdatedDisplay(row) }}
                 </td>
                 <td v-if="showStatusColumn">
-                  <StatusBadge :text="getEntryStatusText(row)" :tone="getTone(row.status)" />
+                  <StatusBadge :text="getEntryStatusText(row)" :tone="getRowStatusTone(row)" />
                 </td>
                 <td>
                   <div class="form-actions fill-row-actions">
-                    <button v-if="row.can_fill && !isSlotDisabledRow(row)" class="btn btn-primary" type="button" @click="openEditor(row, $event)">{{ t("fill.fill") }}</button>
-                    <button v-if="row.can_edit && !isSlotDisabledRow(row)" class="btn btn-secondary" type="button" @click="openEditor(row, $event)">{{ t("fill.edit") }}</button>
-                    <button v-if="row.can_edit && row.entry?.id && !isSlotDisabledRow(row)" class="btn btn-secondary" type="button" @click="openMoveSlotDialog(row, $event)">{{ t("fill.changeSlot") }}</button>
-                    <button
-                      v-if="row.entry?.id"
-                      class="btn"
-                      :class="
-                        isInterviewer
-                          ? ['fill-row-view-btn', hasUploadedDocument(row) ? 'is-uploaded' : 'is-pending']
-                          : 'btn-secondary'
-                      "
-                      type="button"
-                      @click="handleDocumentAction(row, $event)"
-                    >
-                      {{ documentActionLabel }}
-                    </button>
-                    <button
-                      v-if="isAdminViewer && row.entry?.id"
-                      class="btn btn-secondary"
-                      type="button"
-                      @click="openInterviewerPreview(row, $event)"
-                    >
-                      {{ interviewDetailActionLabel }}
-                    </button>
-                    <button v-if="row.can_edit && !isSlotDisabledRow(row)" class="btn btn-danger" type="button" @click="openDeleteDialog(row, $event)">{{ t("fill.delete") }}</button>
+                    <span v-if="isOccupiedLockedRow(row)" class="fill-row-occupied-flag">{{ getOccupiedLockedActionLabel() }}</span>
+                    <template v-else>
+                      <button v-if="row.can_fill && !isRowFillDisabled(row)" class="btn btn-primary" type="button" @click="openEditor(row, $event)">{{ t("fill.fill") }}</button>
+                      <button v-if="row.can_edit && !isSlotDisabledRow(row)" class="btn btn-secondary" type="button" @click="openEditor(row, $event)">{{ t("fill.edit") }}</button>
+                      <button v-if="row.can_edit && row.entry?.id && !isSlotDisabledRow(row)" class="btn btn-secondary" type="button" @click="openMoveSlotDialog(row, $event)">{{ t("fill.changeSlot") }}</button>
+                      <button
+                        v-if="row.entry?.id"
+                        class="btn"
+                        :class="getDocumentActionButtonClass(row)"
+                        type="button"
+                        @click="handleDocumentAction(row, $event)"
+                      >
+                        {{ documentActionLabel }}
+                      </button>
+                      <button
+                        v-if="isAdminViewer && row.entry?.id"
+                        class="btn btn-secondary"
+                        type="button"
+                        @click="openInterviewerPreview(row, $event)"
+                      >
+                        {{ interviewDetailActionLabel }}
+                      </button>
+                      <button
+                        v-if="isPersonalUser && row.entry?.id"
+                        class="btn btn-secondary"
+                        type="button"
+                        @click="openReviewStatusDialog(row)"
+                      >
+                        {{ getReviewStatusButtonLabel(row) }}
+                      </button>
+                      <button v-if="row.can_edit && !isSlotDisabledRow(row)" class="btn btn-danger" type="button" @click="openDeleteDialog(row, $event)">{{ t("fill.delete") }}</button>
+                    </template>
                   </div>
                 </td>
                 <td v-if="isInterviewer">
@@ -1368,7 +2209,7 @@ watch(currentUiLanguage, () => {
       </div>
       <form class="stack-form panel-body" @submit.prevent="handleSaveEntry">
         <label v-for="field in visibleFields" :key="field.id" class="field-block">
-          <span>{{ getLocalizedFieldLabel(field) }}<em v-if="field.is_required"> *</em></span>
+          <span>{{ getLocalizedFieldLabel(field) }}<em v-if="getFieldRequiredMark(field)"> *</em></span>
           <UiSelect
             v-if="getBubbleSelectKind(field)"
             v-model="entryValues[field.field_key]"
@@ -1381,13 +2222,13 @@ watch(currentUiLanguage, () => {
             v-else-if="field.field_type === 'textarea'"
             v-model="entryValues[field.field_key]"
             rows="3"
-            :required="field.is_required"
+            :required="getFieldRequiredMark(field)"
           />
           <input
             v-else
             v-model="entryValues[field.field_key]"
             :type="field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : 'text'"
-            :required="field.is_required"
+            :required="getFieldRequiredMark(field)"
           />
         </label>
         <div class="form-actions">
@@ -1397,12 +2238,11 @@ watch(currentUiLanguage, () => {
       </form>
     </section>
 
-    <dialog ref="interviewerReviewDialog" class="interviewer-review-dialog" @close="resetInterviewerReviewDialog">
+    <dialog ref="interviewerReviewDialog" class="interviewer-review-dialog" :class="{ 'is-fullscreen': interviewerPreviewFullscreen }" @close="resetInterviewerReviewDialog">
       <div class="interviewer-review-shell">
         <section class="interviewer-review-panel interviewer-review-panel--preview">
           <div class="interviewer-review-head">
             <h3>{{ interviewerDialogTitle }}</h3>
-            <button class="btn btn-secondary" type="button" @click="closeInterviewerReviewDialog">{{ t("common.close") }}</button>
           </div>
           <div class="interviewer-review-body">
             <div v-if="interviewerPreviewLoading" class="modal-note">{{ t("common.loading") }}</div>
@@ -1414,19 +2254,25 @@ watch(currentUiLanguage, () => {
         <section class="interviewer-review-panel interviewer-review-panel--editor">
           <div class="interviewer-review-head interviewer-review-head--editor">
             <h3>{{ interviewerReviewTitle }}</h3>
-            <button
-              v-if="canEditInterviewReview"
-              class="btn btn-primary interviewer-review-save"
-              type="button"
-              :disabled="interviewerReviewSaving"
-              @click="submitInterviewerReview"
-            >
-              {{ interviewerReviewSaving ? t("document.saving") : t("common.save") }}
-            </button>
+            <div class="form-actions interviewer-review-head-actions">
+              <button class="btn btn-secondary document-preview-toggle-btn" type="button" @click="toggleInterviewerPreviewFullscreen">
+                {{ interviewerPreviewToggleLabel }}
+              </button>
+              <button class="btn btn-secondary" type="button" @click="closeInterviewerReviewDialog">{{ t("common.close") }}</button>
+              <button
+                v-if="canEditInterviewReview"
+                class="btn btn-primary interviewer-review-save"
+                type="button"
+                :disabled="interviewerReviewSaving"
+                @click="submitInterviewerReview"
+              >
+                {{ interviewerReviewSaving ? t("document.saving") : t("common.save") }}
+              </button>
+            </div>
           </div>
           <div class="interviewer-review-body interviewer-review-body--editor">
             <div v-if="interviewerReviewLoading" class="modal-note">{{ t("common.loading") }}</div>
-            <template v-else>
+            <template v-else-if="canEditInterviewReview">
               <label class="field-block">
                 <span>{{ interviewerReviewResultLabel }}</span>
                 <UiSelect
@@ -1448,8 +2294,94 @@ watch(currentUiLanguage, () => {
                 />
               </label>
             </template>
+            <template v-else>
+              <div v-if="interviewerReviewItems.length" class="review-status-list interviewer-review-list">
+                <article
+                  v-for="(item, index) in interviewerReviewItems"
+                  :key="`${interviewerReviewRow?.entry?.id || 'entry'}-interviewer-${index}`"
+                  class="review-status-card"
+                >
+                  <div class="review-status-card-head">
+                    <strong>{{ item.reviewer }}</strong>
+                    <StatusBadge :text="getReviewResultLabel(item.result)" :tone="getReviewResultToneByValue(item.result)" />
+                  </div>
+                  <div class="review-status-card-meta">
+                    <span>{{ reviewerUpdatedAtLabel }}</span>
+                    <strong>{{ item.updatedAt ? formatDateTime(item.updatedAt) : "-" }}</strong>
+                  </div>
+                  <div class="review-status-card-body">
+                    <span>{{ reviewerCommentLabel }}</span>
+                    <p>{{ item.comment || "-" }}</p>
+                  </div>
+                </article>
+              </div>
+              <div v-else class="preview-box">{{ interviewerReviewListEmpty }}</div>
+            </template>
           </div>
         </section>
+      </div>
+    </dialog>
+
+    <dialog ref="reviewStatusDialog" class="modal-dialog review-status-dialog" @close="resetReviewStatusDialog">
+      <div class="modal-shell review-status-dialog-shell">
+        <div class="modal-surface review-status-dialog-surface">
+          <div class="panel-header modal-header review-status-dialog-header">
+            <div class="review-status-dialog-heading">
+              <h3>{{ reviewStatusDialogTitle }}</h3>
+              <p class="muted-text review-status-dialog-count">{{ reviewStatusCountLabel }}</p>
+            </div>
+            <button class="btn btn-secondary" type="button" @click="closeReviewStatusDialog">{{ t("common.close") }}</button>
+          </div>
+          <div class="panel-body stack-form modal-body review-status-dialog-body">
+            <div v-if="reviewStatusLoading" class="modal-note">{{ t("common.loading") }}</div>
+            <template v-else>
+              <div class="review-status-summary">
+                <div class="review-status-summary-item">
+                  <span>{{ reviewStatusCandidateLabel }}</span>
+                  <strong>{{ reviewStatusSummary.candidateName || "-" }}</strong>
+                </div>
+                <div class="review-status-summary-item">
+                  <span>{{ reviewStatusTeamLabel }}</span>
+                  <strong>{{ reviewStatusSummary.teamName || "-" }}</strong>
+                </div>
+                <div class="review-status-summary-item">
+                  <span>{{ reviewerResultDisplayLabel }}</span>
+                  <strong>{{ reviewStatusCountLabel }}</strong>
+                </div>
+              </div>
+            <div v-if="reviewStatusItems.length" class="review-status-list">
+              <article v-for="(item, index) in reviewStatusItems" :key="`${reviewStatusRow?.entry?.id || 'entry'}-${index}`" class="review-status-card">
+                <div class="review-status-card-head">
+                  <div class="review-status-card-meta">
+                    <strong>{{ item.reviewer }}</strong>
+                    <span>{{ reviewerNameLabel }}</span>
+                  </div>
+                  <StatusBadge :text="getReviewResultLabel(item.result)" :tone="getReviewResultToneByValue(item.result)" />
+                </div>
+                <div class="review-status-card-grid">
+                  <div class="review-status-card-field" v-if="item.reviewStatus">
+                    <span>{{ reviewerStatusLabel }}</span>
+                    <strong>{{ item.reviewStatus }}</strong>
+                  </div>
+                  <div class="review-status-card-field">
+                    <span>{{ reviewerAdmissionStatusLabel }}</span>
+                    <strong>{{ item.admissionStatus || "-" }}</strong>
+                  </div>
+                  <div class="review-status-card-field">
+                    <span>{{ reviewerUpdatedAtLabel }}</span>
+                    <strong>{{ item.updatedAt ? formatDateTime(item.updatedAt) : "-" }}</strong>
+                  </div>
+                  <div class="review-status-card-field">
+                    <span>{{ reviewerCommentLabel }}</span>
+                    <p>{{ item.comment || "-" }}</p>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <div v-else class="preview-box">{{ canViewReviewStatusDetail ? reviewStatusEmptyLabel : reviewStatusNoPermissionLabel }}</div>
+            </template>
+          </div>
+        </div>
       </div>
     </dialog>
 
@@ -1490,6 +2422,7 @@ watch(currentUiLanguage, () => {
                 :can-delete="true"
                 :embedded="true"
                 @fill-simple="openSimpleFillFromDocumentDialog"
+                @close-all="closeDocumentDialog"
                 @updated="async () => { await loadPage(); refreshDocumentRowReference(); }"
               />
 
@@ -1785,16 +2718,38 @@ watch(currentUiLanguage, () => {
       </div>
     </dialog>
 
-    <dialog ref="simpleFormPreviewDialog" class="modal-dialog document-preview-dialog" @close="resetSimpleFormPreviewDialogState">
+    <dialog ref="simpleFormPreviewDialog" class="modal-dialog document-preview-dialog" :class="{ 'is-fullscreen': simpleFormPreviewFullscreen }" @close="resetSimpleFormPreviewDialogState">
       <div class="modal-shell document-preview-dialog-shell">
         <div class="modal-surface document-preview-dialog-surface">
           <div class="panel-header modal-header document-preview-dialog-header">
             <h3>{{ t("document.previewTitle") }}</h3>
-            <button class="btn btn-secondary" type="button" @click="closeSimpleFormPreviewDialog">{{ t("common.close") }}</button>
+            <div class="form-actions document-preview-dialog-header-actions">
+              <button class="btn btn-secondary document-preview-toggle-btn" type="button" @click="toggleSimpleFormPreviewFullscreen">
+                {{ simpleFormPreviewToggleLabel }}
+              </button>
+              <button class="btn btn-secondary" type="button" @click="closeSimpleFormPreviewDialog">{{ t("common.close") }}</button>
+            </div>
           </div>
           <div class="panel-body stack-form modal-body document-preview-dialog-body">
             <div v-if="simpleFormPreviewLoading" class="modal-note">{{ t("common.loading") }}</div>
             <div v-else class="docx-preview-content document-preview-html" v-html="simpleFormPreviewHtml" />
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog ref="simpleFormPreviewConfirmDialog" class="modal-dialog document-confirm-dialog" @close="() => {}">
+      <div class="modal-shell document-confirm-dialog-shell">
+        <div class="modal-surface document-confirm-dialog-surface">
+          <div class="panel-header modal-header document-confirm-dialog-header">
+            <h3>{{ simpleFormPreviewCloseConfirmTitle }}</h3>
+          </div>
+          <div class="panel-body stack-form modal-body document-confirm-dialog-body">
+            <p class="document-confirm-copy">{{ simpleFormPreviewCloseConfirmBody }}</p>
+            <div class="form-actions document-confirm-actions">
+              <button class="btn btn-primary" type="button" @click="confirmCloseSimpleFormPreviewDialog">{{ t("common.confirm") }}</button>
+              <button class="btn btn-secondary" type="button" @click="closeSimpleFormPreviewConfirmDialog">{{ t("common.cancel") }}</button>
+            </div>
           </div>
         </div>
       </div>
